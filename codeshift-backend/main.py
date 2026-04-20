@@ -50,6 +50,12 @@ class RuleProgram:
     outputs: list[PrintOperation]
 
 
+RULE_SUPPORT_SUMMARY = (
+    "Current rule-based support covers simple string variables, direct print/log "
+    "statements, basic greet(...) examples, and simple string concatenation."
+)
+
+
 def normalize_language(language: str) -> str:
     value = language.strip().lower()
 
@@ -511,18 +517,21 @@ async def convert_code(
                 "source_language": source_language,
                 "target_language": target_language,
                 "filename": data.filename,
-                "rule": (
-                    "Rule-based conversion matched simple string variables, "
-                    "print/log statements, or greet(...) examples."
-                )
+                "rule": RULE_SUPPORT_SUMMARY
             }
 
     if not data.allow_ai_fallback:
         return {
             "success": False,
             "converted_code": "",
-            "message": "No custom rule matched, and AI fallback is currently turned off.",
-            "rule": f"Rule-only mode: no custom rule matched for {source_language} -> {target_language}"
+            "message": (
+                "No lightweight rule matched this code, and AI fallback is turned off. "
+                "Try a simpler print/log example or enable AI fallback."
+            ),
+            "rule": (
+                f"Rule-only mode: no rule matched for {source_language} -> {target_language}. "
+                + RULE_SUPPORT_SUMMARY
+            )
         }
 
     converted, ai_message = ai_convert_fallback(
@@ -540,7 +549,10 @@ async def convert_code(
             "success": False,
             "converted_code": "",
             "message": ai_message,
-            "rule": f"No custom rule matched for {source_language} -> {target_language}"
+            "rule": (
+                f"No lightweight rule matched for {source_language} -> {target_language}. "
+                + RULE_SUPPORT_SUMMARY
+            )
         }
 
     return {

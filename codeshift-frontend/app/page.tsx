@@ -459,7 +459,12 @@ export default function Home() {
       const data = await response.json();
 
       if (!data.success) {
-        setStatusMessage(data.message || "Conversion failed.");
+        const fallbackHint = allowAiFallback
+          ? "The backend then tried AI fallback."
+          : "Enable AI fallback to try broader conversions.";
+        setStatusMessage(
+          data.message || `Conversion failed. ${fallbackHint}`
+        );
         setStatusType("error");
         setConversionRule(data.rule || "");
         setProgressStage("idle");
@@ -931,6 +936,13 @@ export default function Home() {
               <p className="text-base font-semibold">{statusMessage}</p>
               {conversionRule && conversionRule !== statusMessage && (
                 <p className="mt-1 text-sm opacity-90">{conversionRule}</p>
+              )}
+              {statusType === "error" && (
+                <p className="mt-2 text-sm opacity-90">
+                  Rule-based mode currently works best for simple string variables,
+                  print or log statements, basic <code>greet(...)</code> examples,
+                  and simple string concatenation.
+                </p>
               )}
             </div>
           )}
