@@ -1,91 +1,77 @@
-# 🚀 CodeShift
+# CodeShift
 
-![Next.js](https://img.shields.io/badge/Next.js-Frontend-black)
-![FastAPI](https://img.shields.io/badge/FastAPI-Backend-green)
-![License](https://img.shields.io/badge/License-MIT-blue)
+CodeShift is a small full-stack code conversion prototype.
 
-CodeShift is a full-stack web application that converts code between programming languages using rule-based logic with optional AI fallback. It supports both file upload and direct text input, making code transformation fast, flexible, and user-friendly.
+- Frontend: Next.js app for entering code, choosing source and target languages, and testing provider settings
+- Backend: FastAPI service with a lightweight rule-based converter and an OpenAI-compatible fallback
 
----
+## Repository Layout
 
-✨ **Core capabilities**
-- 🔄 Convert code between multiple languages (Python, C++, Java, JavaScript)
-- 🧠 Rule-based conversion for fast and deterministic results
-- 🤖 Optional AI fallback for complex cases
-- 📄 Upload code files or paste code directly
-- ⚡ Real-time conversion with clear UI feedback
-- 🔌 Supports custom AI providers (API key + base URL + model)
+```text
+codeshift-frontend/   Next.js UI
+codeshift-backend/    FastAPI API
+```
 
----
+## Current Capabilities
 
-🛠️ **Technology stack**  
-Frontend built with **Next.js, React, and Tailwind CSS**  
-Backend powered by **FastAPI and Python**  
-AI integration supports **OpenAI-compatible APIs**
+- Detects `python`, `cpp`, `java`, and `javascript` from filenames
+- Applies lightweight rule-based conversion for:
+  - simple string variables
+  - direct print/log statements
+  - basic `greet(...)` examples
+  - simple string concatenation
+- Falls back to an OpenAI-compatible Responses API call when no lightweight rule matches
+- Keeps provider API keys in memory for the current browser session instead of persisting them to local storage
 
----
+## Local Development
 
-📂 **Project structure**
+### Backend
 
-CodeShift/
-├── codeshift-frontend/   # Next.js frontend
-├── codeshift-backend/    # FastAPI backend
-└── README.md
-
----
-
-🚀 **Getting started**
-
-Clone the repository and run both backend and frontend locally.
-
-Backend:
-
+```bash
 cd codeshift-backend
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload
+cp .env.example .env
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
 
-Frontend:
+Environment variables:
 
+- `OPENAI_API_KEY`: required for AI fallback
+- `OPENAI_BASE_URL`: optional OpenAI-compatible base URL
+- `OPENAI_MODEL`: optional model override, defaults to `gpt-5.4-mini`
+- `CODESHIFT_ALLOWED_ORIGINS`: optional comma-separated frontend origins for CORS
+
+### Frontend
+
+```bash
 cd codeshift-frontend
 npm install
 npm run dev
+```
 
-The backend runs on http://127.0.0.1:8000 and the frontend runs on http://localhost:3000.
+Optional environment variables:
 
----
+- `NEXT_PUBLIC_API_URL`: backend base URL, defaults to `http://127.0.0.1:8000`
 
-🔑 **AI configuration**
+## Deployment Notes
 
-When you open the app, you can configure your own AI provider by entering an API key, base URL, and model. This works with OpenAI, OpenRouter, and other OpenAI-compatible APIs.
+- Frontend preview deployments are currently handled by Vercel
+- The current live demo is [code-shift-sigma.vercel.app](https://code-shift-sigma.vercel.app)
+- For deployed environments, set `CODESHIFT_ALLOWED_ORIGINS` to include every frontend origin that should call the backend
 
----
+## Validation
 
-🌐 **Deployment**
+```bash
+cd codeshift-frontend && npm run lint
+cd codeshift-frontend && npm run build
+python3 -m py_compile codeshift-backend/main.py
+cd codeshift-backend && python3 -m unittest -v
+```
 
-The recommended setup is to deploy the frontend on Vercel and the backend on Railway for a simple and scalable full-stack deployment.
+## Known Gaps
 
----
-
-📌 **Future improvements**
-- Code error detection and automatic fix suggestions
-- Multi-file project conversion
-- More language support
-- AI-powered optimization and refactoring
-
----
-
-🤝 **Contributing**
-
-Feel free to fork the repository and submit pull requests.
-
----
-
-📄 **License**
-
-MIT License
-
----
-
-🌍 **Live Demo**
-
-(https://code-shift-sigma.vercel.app)
+- No CI workflow yet
+- Rule-based conversion still covers only lightweight code patterns
+- Anything outside the supported lightweight patterns relies on AI fallback

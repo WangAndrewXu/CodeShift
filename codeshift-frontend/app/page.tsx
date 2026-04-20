@@ -12,6 +12,8 @@ type ProviderConfig = {
   model: string;
 };
 
+type PersistedProviderConfig = Omit<ProviderConfig, "apiKey">;
+
 type ProviderTestResponse = {
   success: boolean;
   message: string;
@@ -24,6 +26,28 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 const STORAGE_KEY = "codeshift_provider_config_v1";
+const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
+  providerName: "OpenAI",
+  apiKey: "",
+  baseUrl: "https://api.openai.com/v1",
+  model: "gpt-5.4-mini",
+};
+
+function normalizePersistedProviderConfig(
+  saved: string
+): PersistedProviderConfig | null {
+  try {
+    const parsed = JSON.parse(saved) as Partial<ProviderConfig>;
+
+    return {
+      providerName: parsed.providerName || DEFAULT_PROVIDER_CONFIG.providerName,
+      baseUrl: parsed.baseUrl || DEFAULT_PROVIDER_CONFIG.baseUrl,
+      model: parsed.model || DEFAULT_PROVIDER_CONFIG.model,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export default function Home() {
   const [fileName, setFileName] = useState("");
@@ -45,40 +69,34 @@ export default function Home() {
   const [progressStage, setProgressStage] = useState<ProgressStage>("idle");
   const [progressPercent, setProgressPercent] = useState(0);
 
-  const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
-    providerName: "OpenAI",
-    apiKey: "",
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-5.4-mini",
-  });
+  const [providerConfig, setProviderConfig] =
+    useState<ProviderConfig>(DEFAULT_PROVIDER_CONFIG);
 
   const [showProviderModal, setShowProviderModal] = useState(false);
-  const [providerForm, setProviderForm] = useState<ProviderConfig>({
-    providerName: "OpenAI",
-    apiKey: "",
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-5.4-mini",
-  });
+  const [providerForm, setProviderForm] =
+    useState<ProviderConfig>(DEFAULT_PROVIDER_CONFIG);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as ProviderConfig;
-        const normalized: ProviderConfig = {
-          providerName: parsed.providerName || "OpenAI",
-          apiKey: parsed.apiKey || "",
-          baseUrl: parsed.baseUrl || "https://api.openai.com/v1",
-          model: parsed.model || "gpt-5.4-mini",
-        };
-        setProviderConfig(normalized);
-        setProviderForm(normalized);
-      } catch {
+      const normalized = normalizePersistedProviderConfig(saved);
+      if (!normalized) {
         setShowProviderModal(true);
+        return;
       }
-    } else {
-      setShowProviderModal(true);
+
+      const nextConfig: ProviderConfig = {
+        ...DEFAULT_PROVIDER_CONFIG,
+        ...normalized,
+      };
+
+      setProviderConfig(nextConfig);
+      setProviderForm(nextConfig);
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+      return;
     }
+
+    setShowProviderModal(true);
   }, []);
 
   function detectLanguage(name: string) {
@@ -186,28 +204,32 @@ export default function Home() {
       baseUrl: providerForm.baseUrl.trim() || "https://api.openai.com/v1",
       model: providerForm.model.trim() || "gpt-5.4-mini",
     };
+    const persisted: PersistedProviderConfig = {
+      providerName: trimmed.providerName,
+      baseUrl: trimmed.baseUrl,
+      model: trimmed.model,
+    };
 
     setProviderConfig(trimmed);
     setProviderForm(trimmed);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
     setShowProviderModal(false);
-    setStatusMessage("Provider settings saved in this browser.");
+    setStatusMessage(
+      trimmed.apiKey
+        ? "Provider settings saved. API key stays only in this browser session."
+        : "Provider settings saved in this browser."
+    );
     setStatusType("success");
   }
 
   function removeProviderConfig() {
-    const emptyConfig: ProviderConfig = {
-      providerName: "OpenAI",
-      apiKey: "",
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-5.4-mini",
-    };
+    const emptyConfig: ProviderConfig = DEFAULT_PROVIDER_CONFIG;
 
     setProviderConfig(emptyConfig);
     setProviderForm(emptyConfig);
     window.localStorage.removeItem(STORAGE_KEY);
     setShowProviderModal(true);
-    setStatusMessage("Saved provider settings removed.");
+    setStatusMessage("Saved provider settings removed, including the in-memory API key.");
     setStatusType("info");
   }
 
@@ -437,7 +459,12 @@ export default function Home() {
       const data = await response.json();
 
       if (!data.success) {
-        setStatusMessage(data.message || "Conversion failed.");
+        const fallbackHint = allowAiFallback
+          ? "The backend then tried AI fallback."
+          : "Enable AI fallback to try broader conversions.";
+        setStatusMessage(
+          data.message || `Conversion failed. ${fallbackHint}`
+        );
         setStatusType("error");
         setConversionRule(data.rule || "");
         setProgressStage("idle");
@@ -544,6 +571,10 @@ export default function Home() {
               <p className="mt-2 text-sm text-gray-600">
                 Enter a provider name, API key, base URL, and model. This works best
                 with OpenAI or OpenAI-compatible APIs.
+              </p>
+              <p className="mt-2 text-sm text-amber-700">
+                The API key is kept only for the current browser session and is not
+                saved to local storage.
               </p>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -672,7 +703,7 @@ export default function Home() {
                   Model: {providerConfig.model || "Not set"}
                 </p>
                 <p className="mt-1 text-sm text-gray-600">
-                  API key: {providerConfig.apiKey ? "Saved in browser" : "Not saved"}
+                  API key: {providerConfig.apiKey ? "Loaded for current session only" : "Not loaded"}
                 </p>
               </div>
 
@@ -839,7 +870,9 @@ export default function Home() {
               Step 2: Convert
             </h2>
             <p className="mt-1 text-sm text-gray-600">
-              Rule-based conversion is tried first. If it does not match, AI fallback can use the provider settings above.
+              Rule-based conversion is tried first for simple string variables,
+              print or log statements, and basic <code>greet(...)</code> examples.
+              If those patterns do not match, AI fallback can use the provider settings above.
             </p>
 
             <div className="mt-5">
@@ -903,6 +936,13 @@ export default function Home() {
               <p className="text-base font-semibold">{statusMessage}</p>
               {conversionRule && conversionRule !== statusMessage && (
                 <p className="mt-1 text-sm opacity-90">{conversionRule}</p>
+              )}
+              {statusType === "error" && (
+                <p className="mt-2 text-sm opacity-90">
+                  Rule-based mode currently works best for simple string variables,
+                  print or log statements, basic <code>greet(...)</code> examples,
+                  and simple string concatenation.
+                </p>
               )}
             </div>
           )}
