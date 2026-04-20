@@ -1,18 +1,28 @@
-from fastapi import FastAPI, UploadFile, File, Header
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from openai import OpenAI
 import os
 import re
+from typing import cast
+
+from fastapi import FastAPI, File, Header, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from openai import OpenAI
+from pydantic import BaseModel
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+
+def get_allowed_origins():
+    raw = os.getenv("CODESHIFT_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+    return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -68,7 +78,7 @@ def get_ai_client(api_key: str | None = None, base_url: str | None = None):
     if final_base_url:
         kwargs["base_url"] = final_base_url
 
-    return OpenAI(**kwargs)
+    return OpenAI(**cast(dict[str, str], kwargs))
 
 
 def test_ai_connection(
@@ -311,7 +321,10 @@ def render_code(names, language: str):
 
 @app.get("/")
 async def root():
-    return {"message": "CodeShift backend is running"}
+    return {
+        "message": "CodeShift backend is running",
+        "allowed_origins": get_allowed_origins(),
+    }
 
 
 @app.post("/load-file")
