@@ -7,6 +7,7 @@ on:
       - main
       - codex/skill-api-v1
       - codex/skill-api-v1-3
+      - codex/skill-api-v1-4
 
 jobs:
   backend:
@@ -29,32 +30,27 @@ jobs:
           cd codeshift-backend
           python3 -m unittest -v
 
-      - name: Verify capabilities contract
+      - name: Verify contract snapshots
         run: |
           cd codeshift-backend
           python3 - <<'PY'
           import asyncio
-          from app.api import capabilities
-
-          payload = asyncio.run(capabilities()).model_dump(mode="json")
-          assert payload["service"] == "codeshift"
-          assert payload["service_version"] == "v1.3"
-          assert "capability_hint" in payload
-          assert payload["request_log_retention_days"] == 7
-          assert payload["idempotency_ttl_days"] == 3
-          assert "RULE_NOT_MATCHED" in payload["error_codes"]
-          assert "IDEMPOTENCY_KEY_REUSED" in payload["error_codes"]
-          PY
-
-      - name: Verify convert contract
-        run: |
-          cd codeshift-backend
-          python3 - <<'PY'
-          import asyncio
-          from app.api import convert_code
+          import json
+          from pathlib import Path
+          from app.api import capabilities, convert_code
           from app.schemas import ConvertRequest
 
-          payload = asyncio.run(
+          with open(Path("contract_snapshots") / "v1.3.json", "r", encoding="utf-8") as handle:
+              snapshot = json.load(handle)
+
+          capabilities_payload = asyncio.run(capabilities()).model_dump(mode="json")
+          assert set(capabilities_payload.keys()) == set(snapshot["capabilities"]["required_keys"])
+          for key, value in snapshot["capabilities"]["expected_values"].items():
+              assert capabilities_payload[key] == value
+          for error_code in snapshot["capabilities"]["required_error_codes"]:
+              assert error_code in capabilities_payload["error_codes"]
+
+          convert_payload = asyncio.run(
               convert_code(
                   ConvertRequest(
                       code='name = "Alice"\\nprint("Hello, " + name)\\n',
@@ -66,12 +62,11 @@ jobs:
                   x_idempotency_key="ci-contract-check",
               )
           ).model_dump(mode="json")
-          assert payload["success"] is True
-          assert payload["execution_mode"] == "rule_based"
-          assert payload["rule_match_type"] == "string_concatenation"
-          assert payload["service_version"] == "v1.3"
-          assert payload["idempotency_key"] == "ci-contract-check"
-          assert payload["idempotent_replay"] is False
+          assert set(convert_payload.keys()) == set(snapshot["convert"]["success_required_keys"])
+          for key, value in snapshot["convert"]["success_example"].items():
+              assert convert_payload[key] == value
+          assert convert_payload["success"] is True
+          assert convert_payload["trace_id"].startswith("trace_")
           PY
 
   frontend:
