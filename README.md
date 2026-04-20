@@ -37,14 +37,14 @@ skills/code-conversion-skill/       Agent-facing skill package and references
 
 The first-pass skill package lives at:
 
-- [skills/code-conversion-skill/SKILL.md](/Users/xuwang/Code_Shift/skills/code-conversion-skill/SKILL.md)
+- [skills/code-conversion-skill/SKILL.md](skills/code-conversion-skill/SKILL.md)
 
 Supporting references:
 
-- [skills/code-conversion-skill/references/api.md](/Users/xuwang/Code_Shift/skills/code-conversion-skill/references/api.md)
-- [skills/code-conversion-skill/references/supported-patterns.md](/Users/xuwang/Code_Shift/skills/code-conversion-skill/references/supported-patterns.md)
-- [skills/code-conversion-skill/references/failure-modes.md](/Users/xuwang/Code_Shift/skills/code-conversion-skill/references/failure-modes.md)
-- [skills/code-conversion-skill/references/examples.md](/Users/xuwang/Code_Shift/skills/code-conversion-skill/references/examples.md)
+- [skills/code-conversion-skill/references/api.md](skills/code-conversion-skill/references/api.md)
+- [skills/code-conversion-skill/references/supported-patterns.md](skills/code-conversion-skill/references/supported-patterns.md)
+- [skills/code-conversion-skill/references/failure-modes.md](skills/code-conversion-skill/references/failure-modes.md)
+- [skills/code-conversion-skill/references/examples.md](skills/code-conversion-skill/references/examples.md)
 
 Current service contract version:
 
