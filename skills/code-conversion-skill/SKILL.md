@@ -44,9 +44,12 @@ Do not use this skill when:
   - `capability_hint`
   - `service_version`
   - `trace_id`
+  - `idempotency_key`
+  - `idempotent_replay`
 - On failures, also preserve `error_code` if present.
 - If the service returns a rule-only failure, explain that the input exceeded lightweight support rather than claiming the service is broken.
 - If AI fallback is disabled, do not silently retry with AI.
+- For safe retry behavior from an agent workflow, send a stable `X-Idempotency-Key` header and preserve replay semantics in the caller.
 
 ## Minimal Decision Policy
 
