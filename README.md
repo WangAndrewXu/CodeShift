@@ -45,6 +45,7 @@ Supporting references:
 - [skills/code-conversion-skill/references/supported-patterns.md](skills/code-conversion-skill/references/supported-patterns.md)
 - [skills/code-conversion-skill/references/failure-modes.md](skills/code-conversion-skill/references/failure-modes.md)
 - [skills/code-conversion-skill/references/examples.md](skills/code-conversion-skill/references/examples.md)
+- [codeshift-backend/contract_snapshots/v1.3.json](codeshift-backend/contract_snapshots/v1.3.json) as the machine-readable contract snapshot
 
 Current service contract version:
 
@@ -139,7 +140,7 @@ cd codeshift-backend && python3 -m unittest -v
 
 ## CI
 
-GitHub Actions currently runs `Skill API Checks` for the skill/API branch work. The backend and frontend checks are intended to catch API contract regressions before merge.
+GitHub Actions currently runs `Skill API Checks` for the skill/API branch work. The backend and frontend checks include snapshot-based contract regression checks before merge.
 
 ## Known Gaps
 

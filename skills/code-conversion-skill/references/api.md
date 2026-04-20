@@ -106,3 +106,14 @@ Retention controls:
 
 - `CODESHIFT_REQUEST_LOG_RETENTION_DAYS` defaults to `7`
 - `CODESHIFT_IDEMPOTENCY_TTL_DAYS` defaults to `3`
+
+
+## Contract Snapshots
+
+The repository keeps the current contract snapshot at `codeshift-backend/contract_snapshots/v1.3.json`.
+
+Use it as the canonical machine-readable reference for:
+
+- required response keys
+- expected capability defaults
+- success/failure shape regression checks
