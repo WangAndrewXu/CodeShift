@@ -7,10 +7,13 @@ from .config import get_allowed_origins
 from .providers import ai_convert_fallback, test_ai_connection
 from .rule_engine import (
     RULE_SUPPORT_SUMMARY,
+    SERVICE_VERSION,
     SUPPORTED_LANGUAGES,
     SUPPORTED_RULE_PATTERNS,
     detect_language_from_filename,
+    detect_rule_match_type,
     extract_rule_program,
+    infer_rule_match_type,
     normalize_language,
     render_code,
 )
@@ -44,6 +47,7 @@ async def capabilities():
     return {
         "service": "codeshift",
         "version": "v1",
+        "service_version": SERVICE_VERSION,
         "supported_languages": SUPPORTED_LANGUAGES,
         "rule_patterns": SUPPORTED_RULE_PATTERNS,
         "rule_summary": RULE_SUPPORT_SUMMARY,
@@ -54,6 +58,7 @@ async def capabilities():
             "AI_FALLBACK_FAILED",
             "INVALID_UTF8_FILE",
             "FILE_LOAD_FAILED",
+            "PROVIDER_TEST_FAILED",
         ],
     }
 
@@ -71,6 +76,7 @@ async def load_file(file: UploadFile = File(...)):
             "filename": file.filename,
             "content": content,
             "language": language,
+            "service_version": SERVICE_VERSION,
             "trace_id": trace_id,
         }
     except UnicodeDecodeError:
@@ -78,6 +84,7 @@ async def load_file(file: UploadFile = File(...)):
             "success": False,
             "message": "This file is not valid UTF-8 text.",
             "error_code": "INVALID_UTF8_FILE",
+            "service_version": SERVICE_VERSION,
             "trace_id": trace_id,
         }
     except Exception as exc:
@@ -85,6 +92,7 @@ async def load_file(file: UploadFile = File(...)):
             "success": False,
             "message": f"Failed to load file: {str(exc)}",
             "error_code": "FILE_LOAD_FAILED",
+            "service_version": SERVICE_VERSION,
             "trace_id": trace_id,
         }
 
@@ -107,9 +115,11 @@ async def test_provider(
     return {
         "success": success,
         "message": message,
+        "error_code": "" if success else "PROVIDER_TEST_FAILED",
         "provider_name": x_provider_name or "",
         "model": x_model or "",
         "base_url": x_base_url or "",
+        "service_version": SERVICE_VERSION,
         "trace_id": trace_id,
     }
 
@@ -133,6 +143,7 @@ async def convert_code(
         converted = render_code(program, target_language)
 
         if converted is not None:
+            rule_match_type = detect_rule_match_type(data.code, source_language, program)
             return {
                 "success": True,
                 "converted_code": converted,
@@ -141,7 +152,9 @@ async def convert_code(
                 "target_language": target_language,
                 "filename": data.filename,
                 "execution_mode": "rule_based",
+                "rule_match_type": rule_match_type,
                 "rule": RULE_SUPPORT_SUMMARY,
+                "service_version": SERVICE_VERSION,
                 "trace_id": trace_id,
             }
 
@@ -155,10 +168,12 @@ async def convert_code(
             ),
             "execution_mode": "rule_only_failed",
             "error_code": "RULE_NOT_MATCHED",
+            "rule_match_type": "",
             "rule": (
                 f"Rule-only mode: no rule matched for {source_language} -> {target_language}. "
                 + RULE_SUPPORT_SUMMARY
             ),
+            "service_version": SERVICE_VERSION,
             "trace_id": trace_id,
         }
 
@@ -179,10 +194,12 @@ async def convert_code(
             "message": ai_message,
             "execution_mode": "ai_fallback_failed",
             "error_code": "AI_FALLBACK_FAILED",
+            "rule_match_type": "",
             "rule": (
                 f"No lightweight rule matched for {source_language} -> {target_language}. "
                 + RULE_SUPPORT_SUMMARY
             ),
+            "service_version": SERVICE_VERSION,
             "trace_id": trace_id,
         }
 
@@ -194,6 +211,8 @@ async def convert_code(
         "target_language": target_language,
         "filename": data.filename,
         "execution_mode": "ai_fallback",
+        "rule_match_type": "",
         "rule": ai_message,
+        "service_version": SERVICE_VERSION,
         "trace_id": trace_id,
     }

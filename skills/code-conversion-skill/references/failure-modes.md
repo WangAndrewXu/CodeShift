@@ -34,6 +34,17 @@ Recommended agent behavior:
 - Do not claim deterministic conversion succeeded
 - If relevant, suggest testing the provider with `POST /test-provider`
 
+## Provider test failure
+
+Error code:
+
+- `PROVIDER_TEST_FAILED`
+
+Meaning:
+
+- `POST /test-provider` was called
+- The provider could not be reached or returned an invalid response
+
 ## Traceability
 
 Every API response now includes `trace_id`.

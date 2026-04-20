@@ -16,6 +16,8 @@ SUPPORTED_RULE_PATTERNS = [
 
 SUPPORTED_LANGUAGES = ["python", "cpp", "java", "javascript"]
 
+SERVICE_VERSION = "v1.1"
+
 
 def normalize_language(language: str) -> str:
     value = language.strip().lower()
@@ -170,6 +172,36 @@ def uses_greet(program: RuleProgram):
     )
 
 
+def infer_rule_match_type(program: RuleProgram):
+    output_kinds = {operation.kind for operation in program.outputs}
+
+    if output_kinds & {"greet_literal", "greet_variable"}:
+        return "greet_example"
+
+    if program.variables and output_kinds == {"literal"}:
+        return "string_concatenation"
+
+    if output_kinds == {"literal"}:
+        return "direct_print"
+
+    if output_kinds <= {"literal", "variable"} and "variable" in output_kinds:
+        return "string_variable_print"
+
+    return "lightweight_rule"
+
+
+def detect_rule_match_type(code: str, language: str, program: RuleProgram):
+    if language in {"python", "java", "javascript"}:
+        if re.search(r'"\s*\+\s*\w+|\w+\s*\+\s*"', code):
+            return "string_concatenation"
+
+    if language == "cpp":
+        if re.search(r'"\s*<<\s*\w+|\w+\s*<<\s*"', code):
+            return "string_concatenation"
+
+    return infer_rule_match_type(program)
+
+
 def render_python(program: RuleProgram):
     variable_lines = "\n".join(
         [f'{name} = "{value}"' for name, value in program.variables]
@@ -305,4 +337,3 @@ def render_code(program: RuleProgram, language: str):
     if language == "javascript":
         return render_javascript(program)
     return None
-

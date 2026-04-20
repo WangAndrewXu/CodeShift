@@ -14,6 +14,7 @@ Example response fields:
 
 - `service`
 - `version`
+- `service_version`
 - `supported_languages`
 - `rule_patterns`
 - `rule_summary`
@@ -51,7 +52,9 @@ Response fields:
 - `target_language`
 - `filename`
 - `execution_mode`
+- `rule_match_type`
 - `rule`
+- `service_version`
 - `trace_id`
 - `error_code` on failures
 
@@ -68,6 +71,15 @@ Current failure codes:
 - `AI_FALLBACK_FAILED`
 - `INVALID_UTF8_FILE`
 - `FILE_LOAD_FAILED`
+- `PROVIDER_TEST_FAILED`
+
+Current rule match types:
+
+- `direct_print`
+- `string_variable_print`
+- `greet_example`
+- `string_concatenation`
+- `lightweight_rule`
 
 ### `POST /test-provider`
 

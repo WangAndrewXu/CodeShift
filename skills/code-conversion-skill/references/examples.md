@@ -20,7 +20,10 @@ Typical output:
 {
   "success": true,
   "converted_code": "console.log(\"Hello, Alice\");\n",
-  "execution_mode": "rule_based"
+  "execution_mode": "rule_based",
+  "rule_match_type": "string_concatenation",
+  "service_version": "v1.1",
+  "trace_id": "trace_123abc456def"
 }
 ```
 
@@ -43,6 +46,9 @@ Typical output:
 ```json
 {
   "success": false,
-  "execution_mode": "rule_only_failed"
+  "execution_mode": "rule_only_failed",
+  "error_code": "RULE_NOT_MATCHED",
+  "service_version": "v1.1",
+  "trace_id": "trace_123abc456def"
 }
 ```

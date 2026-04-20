@@ -37,8 +37,10 @@ Do not use this skill when:
   - `success`
   - `converted_code`
   - `execution_mode`
+  - `rule_match_type`
   - `message`
   - `rule`
+  - `service_version`
   - `trace_id`
 - On failures, also preserve `error_code` if present.
 - If the service returns a rule-only failure, explain that the input exceeded lightweight support rather than claiming the service is broken.
