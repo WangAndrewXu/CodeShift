@@ -865,7 +865,9 @@ export default function Home() {
               Step 2: Convert
             </h2>
             <p className="mt-1 text-sm text-gray-600">
-              Rule-based conversion is tried first. If it does not match, AI fallback can use the provider settings above.
+              Rule-based conversion is tried first for simple string variables,
+              print or log statements, and basic <code>greet(...)</code> examples.
+              If those patterns do not match, AI fallback can use the provider settings above.
             </p>
 
             <div className="mt-5">
