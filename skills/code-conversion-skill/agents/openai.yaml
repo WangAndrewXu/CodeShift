@@ -1,0 +1,4 @@
+version: 1
+display_name: Code Conversion
+short_description: Convert small code snippets through the CodeShift API.
+default_prompt: Convert a small single-file code example with CodeShift, preferring rule-based conversion first and using AI fallback only when explicitly allowed.
