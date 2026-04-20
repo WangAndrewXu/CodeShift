@@ -5,6 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_allowed_origins
 from .providers import ai_convert_fallback, test_ai_connection
+from .runtime_store import (
+    append_request_log,
+    build_request_hash,
+    load_idempotency_record,
+    now_utc_iso,
+    save_idempotency_record,
+    sha256_text,
+)
 from .rule_engine import (
     RULE_SUPPORT_SUMMARY,
     SERVICE_VERSION,
@@ -29,12 +37,79 @@ app.add_middleware(
 )
 
 
+ERROR_CODES = [
+    "RULE_NOT_MATCHED",
+    "AI_FALLBACK_FAILED",
+    "INVALID_UTF8_FILE",
+    "FILE_LOAD_FAILED",
+    "PROVIDER_TEST_FAILED",
+    "IDEMPOTENCY_KEY_REUSED",
+]
+
+
 def new_trace_id():
     return f"trace_{uuid4().hex[:12]}"
 
 
 def build_capability_hint():
     return f"Supported lightweight patterns: {', '.join(SUPPORTED_RULE_PATTERNS)}."
+
+
+def summarize_code_payload(code: str):
+    return {
+        "code_sha256": sha256_text(code),
+        "code_length": len(code),
+    }
+
+
+def log_api_event(
+    endpoint: str,
+    trace_id: str,
+    response: dict,
+    *,
+    request: dict | None = None,
+    metadata: dict | None = None,
+):
+    append_request_log(
+        {
+            "timestamp": now_utc_iso(),
+            "endpoint": endpoint,
+            "trace_id": trace_id,
+            "success": bool(response.get("success", False)),
+            "error_code": response.get("error_code", ""),
+            "execution_mode": response.get("execution_mode", ""),
+            "service_version": response.get("service_version", SERVICE_VERSION),
+            "request": request or {},
+            "metadata": metadata or {},
+        }
+    )
+
+
+def maybe_store_idempotent_response(idempotency_key: str | None, request_hash: str, response: dict):
+    if not idempotency_key:
+        return
+
+    save_idempotency_record(
+        idempotency_key,
+        {
+            "request_hash": request_hash,
+            "response": response,
+        },
+    )
+
+
+def idempotency_response_fields(idempotency_key: str | None, replay: bool):
+    return {
+        "idempotency_key": idempotency_key or "",
+        "idempotent_replay": replay,
+    }
+
+
+def idempotency_log_metadata(idempotency_key: str | None, request_hash: str, replay: bool):
+    return {
+        **idempotency_response_fields(idempotency_key, replay),
+        "request_hash": request_hash,
+    }
 
 
 @app.get("/")
@@ -56,13 +131,7 @@ async def capabilities():
         "rule_summary": RULE_SUPPORT_SUMMARY,
         "default_execution_mode": "rule_first",
         "supports_ai_fallback": True,
-        "error_codes": [
-            "RULE_NOT_MATCHED",
-            "AI_FALLBACK_FAILED",
-            "INVALID_UTF8_FILE",
-            "FILE_LOAD_FAILED",
-            "PROVIDER_TEST_FAILED",
-        ],
+        "error_codes": ERROR_CODES,
         "capability_hint": build_capability_hint(),
     }
 
@@ -75,7 +144,7 @@ async def load_file(file: UploadFile = File(...)):
         content = raw.decode("utf-8")
         language = detect_language_from_filename(file.filename)
 
-        return {
+        response = {
             "success": True,
             "filename": file.filename,
             "content": content,
@@ -84,8 +153,19 @@ async def load_file(file: UploadFile = File(...)):
             "warnings": [],
             "trace_id": trace_id,
         }
+        log_api_event(
+            "/load-file",
+            trace_id,
+            response,
+            metadata={
+                "filename": file.filename,
+                "language": language,
+                "bytes_read": len(raw),
+            },
+        )
+        return response
     except UnicodeDecodeError:
-        return {
+        response = {
             "success": False,
             "message": "This file is not valid UTF-8 text.",
             "error_code": "INVALID_UTF8_FILE",
@@ -94,8 +174,15 @@ async def load_file(file: UploadFile = File(...)):
             "warnings": [],
             "trace_id": trace_id,
         }
+        log_api_event(
+            "/load-file",
+            trace_id,
+            response,
+            metadata={"filename": file.filename},
+        )
+        return response
     except Exception as exc:
-        return {
+        response = {
             "success": False,
             "message": f"Failed to load file: {str(exc)}",
             "error_code": "FILE_LOAD_FAILED",
@@ -104,6 +191,13 @@ async def load_file(file: UploadFile = File(...)):
             "warnings": [],
             "trace_id": trace_id,
         }
+        log_api_event(
+            "/load-file",
+            trace_id,
+            response,
+            metadata={"filename": getattr(file, "filename", "")},
+        )
+        return response
 
 
 @app.post("/test-provider")
@@ -121,7 +215,7 @@ async def test_provider(
         provider_name=x_provider_name,
     )
 
-    return {
+    response = {
         "success": success,
         "message": message,
         "error_code": "" if success else "PROVIDER_TEST_FAILED",
@@ -133,6 +227,18 @@ async def test_provider(
         "warnings": [],
         "trace_id": trace_id,
     }
+    log_api_event(
+        "/test-provider",
+        trace_id,
+        response,
+        metadata={
+            "provider_name": x_provider_name or "",
+            "model": x_model or "",
+            "base_url": x_base_url or "",
+            "api_key_present": bool(x_api_key),
+        },
+    )
+    return response
 
 
 @app.post("/convert")
@@ -143,10 +249,71 @@ async def convert_code(
     x_base_url: str | None = Header(default=None),
     x_model: str | None = Header(default=None),
     x_provider_name: str | None = Header(default=None),
+    x_idempotency_key: str | None = Header(default=None),
 ):
     trace_id = new_trace_id()
     source_language = normalize_language(data.source_language)
     target_language = normalize_language(data.target_language)
+    request_summary = {
+        "filename": data.filename,
+        "source_language": source_language,
+        "target_language": target_language,
+        "allow_ai_fallback": data.allow_ai_fallback,
+        **summarize_code_payload(data.code),
+    }
+    request_hash = build_request_hash(
+        {
+            "request": data.model_dump(mode="json"),
+            "provider": {
+                "base_url": x_base_url or "",
+                "model": x_model or "",
+                "provider_name": x_provider_name or "",
+                "api_key_sha256": sha256_text(x_api_key) if x_api_key else "",
+            },
+        }
+    )
+
+    if x_idempotency_key:
+        existing_record = load_idempotency_record(x_idempotency_key)
+        if existing_record is not None:
+            if existing_record.get("request_hash") != request_hash:
+                response = {
+                    "success": False,
+                    "converted_code": "",
+                    "message": "This idempotency key was already used with a different convert request.",
+                    "execution_mode": "idempotency_conflict",
+                    "error_code": "IDEMPOTENCY_KEY_REUSED",
+                    "rule_match_type": "",
+                    "rule": "",
+                    "capability_hint": "Retry with a new idempotency key when request contents change.",
+                    "service_version": SERVICE_VERSION,
+                    "warnings": [],
+                    "trace_id": trace_id,
+                    **idempotency_response_fields(x_idempotency_key, False),
+                }
+                log_api_event(
+                    "/v1/convert",
+                    trace_id,
+                    response,
+                    request=request_summary,
+                    metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+                )
+                return response
+
+            replay_response = dict(existing_record["response"])
+            replay_response.update(idempotency_response_fields(x_idempotency_key, True))
+            replay_response["warnings"] = list(replay_response.get("warnings", []))
+            replay_note = "Response replayed from idempotency store."
+            if replay_note not in replay_response["warnings"]:
+                replay_response["warnings"].append(replay_note)
+            log_api_event(
+                "/v1/convert",
+                replay_response.get("trace_id", trace_id),
+                replay_response,
+                request=request_summary,
+                metadata=idempotency_log_metadata(x_idempotency_key, request_hash, True),
+            )
+            return replay_response
 
     program = extract_rule_program(data.code, source_language)
 
@@ -155,7 +322,7 @@ async def convert_code(
 
         if converted is not None:
             rule_match_type = detect_rule_match_type(data.code, source_language, program)
-            return {
+            response = {
                 "success": True,
                 "converted_code": converted,
                 "message": f"Rule-based conversion used for {source_language} -> {target_language}",
@@ -169,10 +336,20 @@ async def convert_code(
                 "service_version": SERVICE_VERSION,
                 "warnings": [],
                 "trace_id": trace_id,
+                **idempotency_response_fields(x_idempotency_key, False),
             }
+            maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
+            log_api_event(
+                "/v1/convert",
+                trace_id,
+                response,
+                request=request_summary,
+                metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+            )
+            return response
 
     if not data.allow_ai_fallback:
-        return {
+        response = {
             "success": False,
             "converted_code": "",
             "message": (
@@ -190,7 +367,17 @@ async def convert_code(
             "service_version": SERVICE_VERSION,
             "warnings": [],
             "trace_id": trace_id,
+            **idempotency_response_fields(x_idempotency_key, False),
         }
+        maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
+        log_api_event(
+            "/v1/convert",
+            trace_id,
+            response,
+            request=request_summary,
+            metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+        )
+        return response
 
     converted, ai_message = ai_convert_fallback(
         data.code,
@@ -203,7 +390,7 @@ async def convert_code(
     )
 
     if converted is None:
-        return {
+        response = {
             "success": False,
             "converted_code": "",
             "message": ai_message,
@@ -218,9 +405,19 @@ async def convert_code(
             "service_version": SERVICE_VERSION,
             "warnings": [],
             "trace_id": trace_id,
+            **idempotency_response_fields(x_idempotency_key, False),
         }
+        maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
+        log_api_event(
+            "/v1/convert",
+            trace_id,
+            response,
+            request=request_summary,
+            metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+        )
+        return response
 
-    return {
+    response = {
         "success": True,
         "converted_code": converted,
         "message": ai_message,
@@ -234,4 +431,14 @@ async def convert_code(
         "service_version": SERVICE_VERSION,
         "warnings": ["AI fallback was used instead of a lightweight deterministic rule."],
         "trace_id": trace_id,
+        **idempotency_response_fields(x_idempotency_key, False),
     }
+    maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
+    log_api_event(
+        "/v1/convert",
+        trace_id,
+        response,
+        request=request_summary,
+        metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+    )
+    return response
