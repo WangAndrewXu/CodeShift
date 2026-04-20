@@ -16,7 +16,7 @@ SUPPORTED_RULE_PATTERNS = [
 
 SUPPORTED_LANGUAGES = ["python", "cpp", "java", "javascript"]
 
-SERVICE_VERSION = "v1.1"
+SERVICE_VERSION = "v1.2"
 
 
 def normalize_language(language: str) -> str:
