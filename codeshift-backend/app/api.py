@@ -1,10 +1,15 @@
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Header, UploadFile
-from fastapi.params import Header as HeaderParam
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.params import Header as HeaderParam
+from pydantic import BaseModel
 
-from .config import get_allowed_origins
+from .config import (
+    get_allowed_origins,
+    get_idempotency_ttl_days,
+    get_request_log_retention_days,
+)
 from .providers import ai_convert_fallback, test_ai_connection
 from .runtime_store import (
     append_request_log,
@@ -25,7 +30,13 @@ from .rule_engine import (
     normalize_language,
     render_code,
 )
-from .schemas import ConvertRequest
+from .schemas import (
+    CapabilityResponse,
+    ConvertRequest,
+    ConvertResponse,
+    LoadFileResponse,
+    ProviderTestResponse,
+)
 
 app = FastAPI()
 
@@ -62,6 +73,12 @@ def normalize_optional_header(value: str | None):
     return value
 
 
+def as_payload(response: BaseModel | dict):
+    if isinstance(response, BaseModel):
+        return response.model_dump(mode="json")
+    return response
+
+
 def summarize_code_payload(code: str):
     return {
         "code_sha256": sha256_text(code),
@@ -72,27 +89,32 @@ def summarize_code_payload(code: str):
 def log_api_event(
     endpoint: str,
     trace_id: str,
-    response: dict,
+    response: BaseModel | dict,
     *,
     request: dict | None = None,
     metadata: dict | None = None,
 ):
+    payload = as_payload(response)
     append_request_log(
         {
             "timestamp": now_utc_iso(),
             "endpoint": endpoint,
             "trace_id": trace_id,
-            "success": bool(response.get("success", False)),
-            "error_code": response.get("error_code", ""),
-            "execution_mode": response.get("execution_mode", ""),
-            "service_version": response.get("service_version", SERVICE_VERSION),
+            "success": bool(payload.get("success", False)),
+            "error_code": payload.get("error_code", ""),
+            "execution_mode": payload.get("execution_mode", ""),
+            "service_version": payload.get("service_version", SERVICE_VERSION),
             "request": request or {},
             "metadata": metadata or {},
         }
     )
 
 
-def maybe_store_idempotent_response(idempotency_key: str | None, request_hash: str, response: dict):
+def maybe_store_idempotent_response(
+    idempotency_key: str | None,
+    request_hash: str,
+    response: BaseModel | dict,
+):
     if not idempotency_key:
         return
 
@@ -100,7 +122,7 @@ def maybe_store_idempotent_response(idempotency_key: str | None, request_hash: s
         idempotency_key,
         {
             "request_hash": request_hash,
-            "response": response,
+            "response": as_payload(response),
         },
     )
 
@@ -127,23 +149,25 @@ async def root():
     }
 
 
-@app.get("/v1/capabilities")
+@app.get("/v1/capabilities", response_model=CapabilityResponse)
 async def capabilities():
-    return {
-        "service": "codeshift",
-        "version": "v1",
-        "service_version": SERVICE_VERSION,
-        "supported_languages": SUPPORTED_LANGUAGES,
-        "rule_patterns": SUPPORTED_RULE_PATTERNS,
-        "rule_summary": RULE_SUPPORT_SUMMARY,
-        "default_execution_mode": "rule_first",
-        "supports_ai_fallback": True,
-        "error_codes": ERROR_CODES,
-        "capability_hint": build_capability_hint(),
-    }
+    return CapabilityResponse(
+        service="codeshift",
+        version="v1",
+        service_version=SERVICE_VERSION,
+        supported_languages=SUPPORTED_LANGUAGES,
+        rule_patterns=SUPPORTED_RULE_PATTERNS,
+        rule_summary=RULE_SUPPORT_SUMMARY,
+        default_execution_mode="rule_first",
+        supports_ai_fallback=True,
+        error_codes=ERROR_CODES,
+        capability_hint=build_capability_hint(),
+        request_log_retention_days=get_request_log_retention_days(),
+        idempotency_ttl_days=get_idempotency_ttl_days(),
+    )
 
 
-@app.post("/load-file")
+@app.post("/load-file", response_model=LoadFileResponse)
 async def load_file(file: UploadFile = File(...)):
     trace_id = new_trace_id()
     try:
@@ -151,15 +175,15 @@ async def load_file(file: UploadFile = File(...)):
         content = raw.decode("utf-8")
         language = detect_language_from_filename(file.filename)
 
-        response = {
-            "success": True,
-            "filename": file.filename,
-            "content": content,
-            "language": language,
-            "service_version": SERVICE_VERSION,
-            "warnings": [],
-            "trace_id": trace_id,
-        }
+        response = LoadFileResponse(
+            success=True,
+            filename=file.filename,
+            content=content,
+            language=language,
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
+        )
         log_api_event(
             "/load-file",
             trace_id,
@@ -172,15 +196,15 @@ async def load_file(file: UploadFile = File(...)):
         )
         return response
     except UnicodeDecodeError:
-        response = {
-            "success": False,
-            "message": "This file is not valid UTF-8 text.",
-            "error_code": "INVALID_UTF8_FILE",
-            "capability_hint": "Upload UTF-8 text source files only.",
-            "service_version": SERVICE_VERSION,
-            "warnings": [],
-            "trace_id": trace_id,
-        }
+        response = LoadFileResponse(
+            success=False,
+            message="This file is not valid UTF-8 text.",
+            error_code="INVALID_UTF8_FILE",
+            capability_hint="Upload UTF-8 text source files only.",
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
+        )
         log_api_event(
             "/load-file",
             trace_id,
@@ -189,15 +213,15 @@ async def load_file(file: UploadFile = File(...)):
         )
         return response
     except Exception as exc:
-        response = {
-            "success": False,
-            "message": f"Failed to load file: {str(exc)}",
-            "error_code": "FILE_LOAD_FAILED",
-            "capability_hint": "Retry with a plain text source file and a supported extension.",
-            "service_version": SERVICE_VERSION,
-            "warnings": [],
-            "trace_id": trace_id,
-        }
+        response = LoadFileResponse(
+            success=False,
+            message=f"Failed to load file: {str(exc)}",
+            error_code="FILE_LOAD_FAILED",
+            capability_hint="Retry with a plain text source file and a supported extension.",
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
+        )
         log_api_event(
             "/load-file",
             trace_id,
@@ -207,7 +231,7 @@ async def load_file(file: UploadFile = File(...)):
         return response
 
 
-@app.post("/test-provider")
+@app.post("/test-provider", response_model=ProviderTestResponse)
 async def test_provider(
     x_api_key: str | None = Header(default=None),
     x_base_url: str | None = Header(default=None),
@@ -226,18 +250,18 @@ async def test_provider(
         provider_name=x_provider_name,
     )
 
-    response = {
-        "success": success,
-        "message": message,
-        "error_code": "" if success else "PROVIDER_TEST_FAILED",
-        "provider_name": x_provider_name or "",
-        "model": x_model or "",
-        "base_url": x_base_url or "",
-        "capability_hint": "" if success else "Check API key, base URL, model, and provider availability.",
-        "service_version": SERVICE_VERSION,
-        "warnings": [],
-        "trace_id": trace_id,
-    }
+    response = ProviderTestResponse(
+        success=success,
+        message=message,
+        error_code="" if success else "PROVIDER_TEST_FAILED",
+        provider_name=x_provider_name or "",
+        model=x_model or "",
+        base_url=x_base_url or "",
+        capability_hint="" if success else "Check API key, base URL, model, and provider availability.",
+        service_version=SERVICE_VERSION,
+        warnings=[],
+        trace_id=trace_id,
+    )
     log_api_event(
         "/test-provider",
         trace_id,
@@ -252,8 +276,8 @@ async def test_provider(
     return response
 
 
-@app.post("/convert")
-@app.post("/v1/convert")
+@app.post("/convert", response_model=ConvertResponse)
+@app.post("/v1/convert", response_model=ConvertResponse)
 async def convert_code(
     data: ConvertRequest,
     x_api_key: str | None = Header(default=None),
@@ -293,20 +317,20 @@ async def convert_code(
         existing_record = load_idempotency_record(x_idempotency_key)
         if existing_record is not None:
             if existing_record.get("request_hash") != request_hash:
-                response = {
-                    "success": False,
-                    "converted_code": "",
-                    "message": "This idempotency key was already used with a different convert request.",
-                    "execution_mode": "idempotency_conflict",
-                    "error_code": "IDEMPOTENCY_KEY_REUSED",
-                    "rule_match_type": "",
-                    "rule": "",
-                    "capability_hint": "Retry with a new idempotency key when request contents change.",
-                    "service_version": SERVICE_VERSION,
-                    "warnings": [],
-                    "trace_id": trace_id,
+                response = ConvertResponse(
+                    success=False,
+                    converted_code="",
+                    message="This idempotency key was already used with a different convert request.",
+                    execution_mode="idempotency_conflict",
+                    error_code="IDEMPOTENCY_KEY_REUSED",
+                    rule_match_type="",
+                    rule="",
+                    capability_hint="Retry with a new idempotency key when request contents change.",
+                    service_version=SERVICE_VERSION,
+                    warnings=[],
+                    trace_id=trace_id,
                     **idempotency_response_fields(x_idempotency_key, False),
-                }
+                )
                 log_api_event(
                     "/v1/convert",
                     trace_id,
@@ -316,15 +340,17 @@ async def convert_code(
                 )
                 return response
 
-            replay_response = dict(existing_record["response"])
-            replay_response.update(idempotency_response_fields(x_idempotency_key, True))
-            replay_response["warnings"] = list(replay_response.get("warnings", []))
+            replay_payload = ConvertResponse(**existing_record["response"]).model_dump(mode="json")
+            replay_payload.update(idempotency_response_fields(x_idempotency_key, True))
+            replay_warnings = list(replay_payload.get("warnings", []))
             replay_note = "Response replayed from idempotency store."
-            if replay_note not in replay_response["warnings"]:
-                replay_response["warnings"].append(replay_note)
+            if replay_note not in replay_warnings:
+                replay_warnings.append(replay_note)
+            replay_payload["warnings"] = replay_warnings
+            replay_response = ConvertResponse(**replay_payload)
             log_api_event(
                 "/v1/convert",
-                replay_response.get("trace_id", trace_id),
+                replay_response.trace_id,
                 replay_response,
                 request=request_summary,
                 metadata=idempotency_log_metadata(x_idempotency_key, request_hash, True),
@@ -338,22 +364,22 @@ async def convert_code(
 
         if converted is not None:
             rule_match_type = detect_rule_match_type(data.code, source_language, program)
-            response = {
-                "success": True,
-                "converted_code": converted,
-                "message": f"Rule-based conversion used for {source_language} -> {target_language}",
-                "source_language": source_language,
-                "target_language": target_language,
-                "filename": data.filename,
-                "execution_mode": "rule_based",
-                "rule_match_type": rule_match_type,
-                "rule": RULE_SUPPORT_SUMMARY,
-                "capability_hint": "",
-                "service_version": SERVICE_VERSION,
-                "warnings": [],
-                "trace_id": trace_id,
+            response = ConvertResponse(
+                success=True,
+                converted_code=converted,
+                message=f"Rule-based conversion used for {source_language} -> {target_language}",
+                source_language=source_language,
+                target_language=target_language,
+                filename=data.filename,
+                execution_mode="rule_based",
+                rule_match_type=rule_match_type,
+                rule=RULE_SUPPORT_SUMMARY,
+                capability_hint="",
+                service_version=SERVICE_VERSION,
+                warnings=[],
+                trace_id=trace_id,
                 **idempotency_response_fields(x_idempotency_key, False),
-            }
+            )
             maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
             log_api_event(
                 "/v1/convert",
@@ -365,26 +391,26 @@ async def convert_code(
             return response
 
     if not data.allow_ai_fallback:
-        response = {
-            "success": False,
-            "converted_code": "",
-            "message": (
+        response = ConvertResponse(
+            success=False,
+            converted_code="",
+            message=(
                 "No lightweight rule matched this code, and AI fallback is turned off. "
                 "Try a simpler print/log example or enable AI fallback."
             ),
-            "execution_mode": "rule_only_failed",
-            "error_code": "RULE_NOT_MATCHED",
-            "rule_match_type": "",
-            "rule": (
+            execution_mode="rule_only_failed",
+            error_code="RULE_NOT_MATCHED",
+            rule_match_type="",
+            rule=(
                 f"Rule-only mode: no rule matched for {source_language} -> {target_language}. "
                 + RULE_SUPPORT_SUMMARY
             ),
-            "capability_hint": build_capability_hint(),
-            "service_version": SERVICE_VERSION,
-            "warnings": [],
-            "trace_id": trace_id,
+            capability_hint=build_capability_hint(),
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
             **idempotency_response_fields(x_idempotency_key, False),
-        }
+        )
         maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
         log_api_event(
             "/v1/convert",
@@ -406,23 +432,23 @@ async def convert_code(
     )
 
     if converted is None:
-        response = {
-            "success": False,
-            "converted_code": "",
-            "message": ai_message,
-            "execution_mode": "ai_fallback_failed",
-            "error_code": "AI_FALLBACK_FAILED",
-            "rule_match_type": "",
-            "rule": (
+        response = ConvertResponse(
+            success=False,
+            converted_code="",
+            message=ai_message,
+            execution_mode="ai_fallback_failed",
+            error_code="AI_FALLBACK_FAILED",
+            rule_match_type="",
+            rule=(
                 f"No lightweight rule matched for {source_language} -> {target_language}. "
                 + RULE_SUPPORT_SUMMARY
             ),
-            "capability_hint": build_capability_hint(),
-            "service_version": SERVICE_VERSION,
-            "warnings": [],
-            "trace_id": trace_id,
+            capability_hint=build_capability_hint(),
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
             **idempotency_response_fields(x_idempotency_key, False),
-        }
+        )
         maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
         log_api_event(
             "/v1/convert",
@@ -433,22 +459,22 @@ async def convert_code(
         )
         return response
 
-    response = {
-        "success": True,
-        "converted_code": converted,
-        "message": ai_message,
-        "source_language": source_language,
-        "target_language": target_language,
-        "filename": data.filename,
-        "execution_mode": "ai_fallback",
-        "rule_match_type": "",
-        "rule": ai_message,
-        "capability_hint": "",
-        "service_version": SERVICE_VERSION,
-        "warnings": ["AI fallback was used instead of a lightweight deterministic rule."],
-        "trace_id": trace_id,
+    response = ConvertResponse(
+        success=True,
+        converted_code=converted,
+        message=ai_message,
+        source_language=source_language,
+        target_language=target_language,
+        filename=data.filename,
+        execution_mode="ai_fallback",
+        rule_match_type="",
+        rule=ai_message,
+        capability_hint="",
+        service_version=SERVICE_VERSION,
+        warnings=["AI fallback was used instead of a lightweight deterministic rule."],
+        trace_id=trace_id,
         **idempotency_response_fields(x_idempotency_key, False),
-    }
+    )
     maybe_store_idempotent_response(x_idempotency_key, request_hash, response)
     log_api_event(
         "/v1/convert",

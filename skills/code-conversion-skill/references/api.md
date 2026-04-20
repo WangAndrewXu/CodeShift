@@ -8,7 +8,7 @@ Base URL depends on deployment. Current production frontend calls:
 
 ### `GET /v1/capabilities`
 
-Returns the current lightweight support surface.
+Returns the current lightweight support surface and retention settings for file-backed runtime storage.
 
 Example response fields:
 
@@ -22,6 +22,8 @@ Example response fields:
 - `supports_ai_fallback`
 - `error_codes`
 - `capability_hint`
+- `request_log_retention_days`
+- `idempotency_ttl_days`
 
 ### `POST /v1/convert`
 
@@ -99,3 +101,8 @@ File-backed request logs and idempotency records are written under `CODESHIFT_ST
 
 - Request log file: `logs/requests.jsonl`
 - Idempotency cache: `idempotency/*.json`
+
+Retention controls:
+
+- `CODESHIFT_REQUEST_LOG_RETENTION_DAYS` defaults to `7`
+- `CODESHIFT_IDEMPOTENCY_TTL_DAYS` defaults to `3`

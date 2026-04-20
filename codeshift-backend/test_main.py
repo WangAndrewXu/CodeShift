@@ -2,12 +2,22 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.api import app
 from app.rule_engine import extract_rule_program, render_code
+from app.runtime_store import (
+    append_request_log,
+    build_idempotency_path,
+    load_idempotency_record,
+    now_utc,
+    now_utc_iso,
+    prune_request_logs,
+    save_idempotency_record,
+)
 from app.schemas import PrintOperation, RuleProgram
 
 
@@ -93,6 +103,8 @@ class ApiContractTests(unittest.TestCase):
             os.environ,
             {
                 "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
+                "CODESHIFT_REQUEST_LOG_RETENTION_DAYS": "7",
+                "CODESHIFT_IDEMPOTENCY_TTL_DAYS": "3",
             },
             clear=False,
         )
@@ -100,13 +112,15 @@ class ApiContractTests(unittest.TestCase):
         self.addCleanup(self.env_patch.stop)
         self.client = TestClient(app)
 
-    def test_capabilities_reports_v12_contract(self):
+    def test_capabilities_reports_v13_contract(self):
         response = self.client.get("/v1/capabilities")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["service_version"], "v1.2")
+        self.assertEqual(payload["service_version"], "v1.3")
         self.assertIn("IDEMPOTENCY_KEY_REUSED", payload["error_codes"])
+        self.assertEqual(payload["request_log_retention_days"], 7)
+        self.assertEqual(payload["idempotency_ttl_days"], 3)
 
     def test_convert_replays_response_for_same_idempotency_key(self):
         request_body = {
@@ -129,6 +143,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertFalse(first_payload["idempotent_replay"])
         self.assertTrue(second_payload["idempotent_replay"])
         self.assertEqual(first_payload["converted_code"], second_payload["converted_code"])
+        self.assertIn("Response replayed from idempotency store.", second_payload["warnings"])
 
     def test_convert_rejects_reused_key_for_different_request(self):
         headers = {"X-Idempotency-Key": "convert-demo-2"}
@@ -180,6 +195,100 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("code_sha256", latest["request"])
         self.assertNotIn("code", latest["request"])
         self.assertIn("request_hash", latest["metadata"])
+
+
+class RuntimeStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.env_patch = patch.dict(
+            os.environ,
+            {
+                "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
+                "CODESHIFT_REQUEST_LOG_RETENTION_DAYS": "7",
+                "CODESHIFT_IDEMPOTENCY_TTL_DAYS": "3",
+            },
+            clear=False,
+        )
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
+
+    def test_prune_request_logs_removes_expired_entries(self):
+        old_timestamp = (now_utc() - timedelta(days=10)).isoformat()
+        fresh_timestamp = now_utc_iso()
+        append_request_log(
+            {
+                "timestamp": old_timestamp,
+                "endpoint": "/v1/convert",
+                "trace_id": "trace_old",
+                "success": True,
+                "error_code": "",
+                "execution_mode": "rule_based",
+                "service_version": "v1.3",
+                "request": {"code_sha256": "old", "code_length": 1},
+                "metadata": {},
+            }
+        )
+        append_request_log(
+            {
+                "timestamp": fresh_timestamp,
+                "endpoint": "/v1/convert",
+                "trace_id": "trace_new",
+                "success": True,
+                "error_code": "",
+                "execution_mode": "rule_based",
+                "service_version": "v1.3",
+                "request": {"code_sha256": "new", "code_length": 1},
+                "metadata": {},
+            }
+        )
+
+        prune_request_logs()
+
+        log_path = os.path.join(self.tmpdir.name, "logs", "requests.jsonl")
+        with open(log_path, "r", encoding="utf-8") as handle:
+            entries = [json.loads(line) for line in handle if line.strip()]
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["trace_id"], "trace_new")
+
+    def test_expired_idempotency_record_is_removed_on_load(self):
+        save_idempotency_record(
+            "expired-key",
+            {
+                "request_hash": "abc123",
+                "response": {
+                    "success": True,
+                    "message": "ok",
+                    "error_code": "",
+                    "capability_hint": "",
+                    "service_version": "v1.3",
+                    "warnings": [],
+                    "trace_id": "trace_123",
+                    "converted_code": "console.log(\"hi\");",
+                    "source_language": "python",
+                    "target_language": "javascript",
+                    "filename": "demo.py",
+                    "execution_mode": "rule_based",
+                    "rule_match_type": "direct_print",
+                    "rule": "test",
+                    "idempotency_key": "expired-key",
+                    "idempotent_replay": False,
+                },
+            },
+        )
+
+        path = build_idempotency_path("expired-key")
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        payload["expires_at"] = (now_utc() - timedelta(minutes=1)).isoformat()
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+
+        loaded = load_idempotency_record("expired-key")
+
+        self.assertIsNone(loaded)
+        self.assertFalse(os.path.exists(path))
 
 
 if __name__ == "__main__":

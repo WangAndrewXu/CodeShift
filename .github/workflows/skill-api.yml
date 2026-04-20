@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - codex/skill-api-v1
+      - codex/skill-api-v1-3
 
 jobs:
   backend:
@@ -32,13 +33,15 @@ jobs:
         run: |
           cd codeshift-backend
           python3 - <<'PY'
-          from app.api import capabilities
           import asyncio
+          from app.api import capabilities
 
-          payload = asyncio.run(capabilities())
+          payload = asyncio.run(capabilities()).model_dump(mode="json")
           assert payload["service"] == "codeshift"
-          assert payload["service_version"] == "v1.2"
+          assert payload["service_version"] == "v1.3"
           assert "capability_hint" in payload
+          assert payload["request_log_retention_days"] == 7
+          assert payload["idempotency_ttl_days"] == 3
           assert "RULE_NOT_MATCHED" in payload["error_codes"]
           assert "IDEMPOTENCY_KEY_REUSED" in payload["error_codes"]
           PY
@@ -62,11 +65,11 @@ jobs:
                   ),
                   x_idempotency_key="ci-contract-check",
               )
-          )
+          ).model_dump(mode="json")
           assert payload["success"] is True
           assert payload["execution_mode"] == "rule_based"
           assert payload["rule_match_type"] == "string_concatenation"
-          assert payload["service_version"] == "v1.2"
+          assert payload["service_version"] == "v1.3"
           assert payload["idempotency_key"] == "ci-contract-check"
           assert payload["idempotent_replay"] is False
           PY
