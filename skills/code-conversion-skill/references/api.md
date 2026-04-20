@@ -21,6 +21,7 @@ Example response fields:
 - `default_execution_mode`
 - `supports_ai_fallback`
 - `error_codes`
+- `capability_hint`
 
 ### `POST /v1/convert`
 
@@ -54,6 +55,8 @@ Response fields:
 - `execution_mode`
 - `rule_match_type`
 - `rule`
+- `warnings`
+- `capability_hint`
 - `service_version`
 - `trace_id`
 - `error_code` on failures
