@@ -29,9 +29,21 @@ class RuleProgramTests(unittest.TestCase):
             [("greet_variable", "name")],
         )
 
+    def test_extracts_python_string_concatenation(self):
+        program = main.extract_rule_program(
+            'name = "Alice"\nprint("Hello, " + name)\n',
+            "python",
+        )
+
+        self.assertIsNotNone(program)
+        self.assertEqual(
+            [(item.kind, item.value) for item in program.outputs],
+            [("literal", "Hello, Alice")],
+        )
+
     def test_rejects_unhandled_print_expression(self):
         program = main.extract_rule_program(
-            'print("Hello, " + name)\n',
+            'print("Hello, " + get_name())\n',
             "python",
         )
 
@@ -51,6 +63,18 @@ class RuleProgramTests(unittest.TestCase):
         self.assertIn('String name = "Alice";', rendered)
         self.assertIn("System.out.println(name);", rendered)
         self.assertIn('System.out.println("Done");', rendered)
+
+    def test_extracts_cpp_string_concatenation(self):
+        program = main.extract_rule_program(
+            'string name = "Alice";\ncout << "Hello, " << name << endl;\n',
+            "cpp",
+        )
+
+        self.assertIsNotNone(program)
+        self.assertEqual(
+            [(item.kind, item.value) for item in program.outputs],
+            [("literal", "Hello, Alice")],
+        )
 
 
 if __name__ == "__main__":

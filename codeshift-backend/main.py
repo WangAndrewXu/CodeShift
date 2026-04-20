@@ -185,7 +185,33 @@ def extract_string_variables(code: str, language: str):
     return [(name, value) for name, value in re.findall(pattern, code)]
 
 
-def parse_print_expression(expression: str, variables: dict[str, str]):
+def parse_concat_expression(
+    expression: str,
+    variables: dict[str, str],
+    separator_pattern: str,
+):
+    parts = [part.strip() for part in re.split(separator_pattern, expression)]
+    if len(parts) < 2:
+        return None
+
+    resolved_parts = []
+    for part in parts:
+        literal_match = re.fullmatch(r'"([^"]*)"', part)
+        if literal_match:
+            resolved_parts.append(literal_match.group(1))
+            continue
+
+        variable_match = re.fullmatch(r'(\w+)', part)
+        if variable_match and variable_match.group(1) in variables:
+            resolved_parts.append(variables[variable_match.group(1)])
+            continue
+
+        return None
+
+    return PrintOperation("literal", "".join(resolved_parts))
+
+
+def parse_print_expression(expression: str, variables: dict[str, str], language: str):
     value = expression.strip()
     literal_match = re.fullmatch(r'"([^"]*)"', value)
     if literal_match:
@@ -202,6 +228,16 @@ def parse_print_expression(expression: str, variables: dict[str, str]):
     greet_variable_match = re.fullmatch(r'greet\((\w+)\)', value)
     if greet_variable_match and greet_variable_match.group(1) in variables:
         return PrintOperation("greet_variable", greet_variable_match.group(1))
+
+    if language in {"python", "java", "javascript"}:
+        concatenated = parse_concat_expression(value, variables, r"\s*\+\s*")
+        if concatenated is not None:
+            return concatenated
+
+    if language == "cpp":
+        concatenated = parse_concat_expression(value, variables, r"\s*<<\s*")
+        if concatenated is not None:
+            return concatenated
 
     return None
 
@@ -223,7 +259,7 @@ def extract_print_operations(code: str, language: str, variables: dict[str, str]
         return []
 
     for match in matches:
-        operation = parse_print_expression(match.group(1), variables)
+        operation = parse_print_expression(match.group(1), variables, language)
         if operation is None:
             return None
         outputs.append(operation)
