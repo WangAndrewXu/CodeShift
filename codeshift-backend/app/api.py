@@ -13,7 +13,6 @@ from .rule_engine import (
     detect_language_from_filename,
     detect_rule_match_type,
     extract_rule_program,
-    infer_rule_match_type,
     normalize_language,
     render_code,
 )
@@ -32,6 +31,10 @@ app.add_middleware(
 
 def new_trace_id():
     return f"trace_{uuid4().hex[:12]}"
+
+
+def build_capability_hint():
+    return f"Supported lightweight patterns: {', '.join(SUPPORTED_RULE_PATTERNS)}."
 
 
 @app.get("/")
@@ -60,6 +63,7 @@ async def capabilities():
             "FILE_LOAD_FAILED",
             "PROVIDER_TEST_FAILED",
         ],
+        "capability_hint": build_capability_hint(),
     }
 
 
@@ -77,6 +81,7 @@ async def load_file(file: UploadFile = File(...)):
             "content": content,
             "language": language,
             "service_version": SERVICE_VERSION,
+            "warnings": [],
             "trace_id": trace_id,
         }
     except UnicodeDecodeError:
@@ -84,7 +89,9 @@ async def load_file(file: UploadFile = File(...)):
             "success": False,
             "message": "This file is not valid UTF-8 text.",
             "error_code": "INVALID_UTF8_FILE",
+            "capability_hint": "Upload UTF-8 text source files only.",
             "service_version": SERVICE_VERSION,
+            "warnings": [],
             "trace_id": trace_id,
         }
     except Exception as exc:
@@ -92,7 +99,9 @@ async def load_file(file: UploadFile = File(...)):
             "success": False,
             "message": f"Failed to load file: {str(exc)}",
             "error_code": "FILE_LOAD_FAILED",
+            "capability_hint": "Retry with a plain text source file and a supported extension.",
             "service_version": SERVICE_VERSION,
+            "warnings": [],
             "trace_id": trace_id,
         }
 
@@ -119,7 +128,9 @@ async def test_provider(
         "provider_name": x_provider_name or "",
         "model": x_model or "",
         "base_url": x_base_url or "",
+        "capability_hint": "" if success else "Check API key, base URL, model, and provider availability.",
         "service_version": SERVICE_VERSION,
+        "warnings": [],
         "trace_id": trace_id,
     }
 
@@ -154,7 +165,9 @@ async def convert_code(
                 "execution_mode": "rule_based",
                 "rule_match_type": rule_match_type,
                 "rule": RULE_SUPPORT_SUMMARY,
+                "capability_hint": "",
                 "service_version": SERVICE_VERSION,
+                "warnings": [],
                 "trace_id": trace_id,
             }
 
@@ -173,7 +186,9 @@ async def convert_code(
                 f"Rule-only mode: no rule matched for {source_language} -> {target_language}. "
                 + RULE_SUPPORT_SUMMARY
             ),
+            "capability_hint": build_capability_hint(),
             "service_version": SERVICE_VERSION,
+            "warnings": [],
             "trace_id": trace_id,
         }
 
@@ -199,7 +214,9 @@ async def convert_code(
                 f"No lightweight rule matched for {source_language} -> {target_language}. "
                 + RULE_SUPPORT_SUMMARY
             ),
+            "capability_hint": build_capability_hint(),
             "service_version": SERVICE_VERSION,
+            "warnings": [],
             "trace_id": trace_id,
         }
 
@@ -213,6 +230,8 @@ async def convert_code(
         "execution_mode": "ai_fallback",
         "rule_match_type": "",
         "rule": ai_message,
+        "capability_hint": "",
         "service_version": SERVICE_VERSION,
+        "warnings": ["AI fallback was used instead of a lightweight deterministic rule."],
         "trace_id": trace_id,
     }
