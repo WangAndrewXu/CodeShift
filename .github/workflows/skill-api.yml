@@ -37,9 +37,38 @@ jobs:
 
           payload = asyncio.run(capabilities())
           assert payload["service"] == "codeshift"
-          assert payload["service_version"] == "v1.1"
+          assert payload["service_version"] == "v1.2"
           assert "capability_hint" in payload
           assert "RULE_NOT_MATCHED" in payload["error_codes"]
+          assert "IDEMPOTENCY_KEY_REUSED" in payload["error_codes"]
+          PY
+
+      - name: Verify convert contract
+        run: |
+          cd codeshift-backend
+          python3 - <<'PY'
+          import asyncio
+          from app.api import convert_code
+          from app.schemas import ConvertRequest
+
+          payload = asyncio.run(
+              convert_code(
+                  ConvertRequest(
+                      code='name = "Alice"\\nprint("Hello, " + name)\\n',
+                      filename="demo.py",
+                      source_language="python",
+                      target_language="javascript",
+                      allow_ai_fallback=False,
+                  ),
+                  x_idempotency_key="ci-contract-check",
+              )
+          )
+          assert payload["success"] is True
+          assert payload["execution_mode"] == "rule_based"
+          assert payload["rule_match_type"] == "string_concatenation"
+          assert payload["service_version"] == "v1.2"
+          assert payload["idempotency_key"] == "ci-contract-check"
+          assert payload["idempotent_replay"] is False
           PY
 
   frontend:
