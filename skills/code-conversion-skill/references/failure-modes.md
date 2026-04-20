@@ -45,6 +45,22 @@ Meaning:
 - `POST /test-provider` was called
 - The provider could not be reached or returned an invalid response
 
+## Idempotency key reuse
+
+Error code:
+
+- `IDEMPOTENCY_KEY_REUSED`
+
+Meaning:
+
+- `POST /v1/convert` was retried with an existing `X-Idempotency-Key`
+- The request body or provider configuration changed
+
+Recommended agent behavior:
+
+- Generate a new idempotency key whenever request contents change
+- Reuse the same key only for exact retry semantics
+
 ## Traceability
 
 Every API response now includes `trace_id`.
