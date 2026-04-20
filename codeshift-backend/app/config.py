@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 
 def get_allowed_origins():
@@ -11,3 +12,10 @@ def get_allowed_origins():
         "http://127.0.0.1:3000",
     ]
 
+
+def get_storage_dir():
+    configured = os.getenv("CODESHIFT_STORAGE_DIR", "").strip()
+    if configured:
+        return configured
+
+    return os.path.join(tempfile.gettempdir(), "codeshift-runtime")
