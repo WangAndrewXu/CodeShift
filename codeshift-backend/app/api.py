@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Header, UploadFile
+from fastapi.params import Header as HeaderParam
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_allowed_origins
@@ -53,6 +54,12 @@ def new_trace_id():
 
 def build_capability_hint():
     return f"Supported lightweight patterns: {', '.join(SUPPORTED_RULE_PATTERNS)}."
+
+
+def normalize_optional_header(value: str | None):
+    if isinstance(value, HeaderParam):
+        return None
+    return value
 
 
 def summarize_code_payload(code: str):
@@ -207,6 +214,10 @@ async def test_provider(
     x_model: str | None = Header(default=None),
     x_provider_name: str | None = Header(default=None),
 ):
+    x_api_key = normalize_optional_header(x_api_key)
+    x_base_url = normalize_optional_header(x_base_url)
+    x_model = normalize_optional_header(x_model)
+    x_provider_name = normalize_optional_header(x_provider_name)
     trace_id = new_trace_id()
     success, message = test_ai_connection(
         api_key=x_api_key,
@@ -251,6 +262,11 @@ async def convert_code(
     x_provider_name: str | None = Header(default=None),
     x_idempotency_key: str | None = Header(default=None),
 ):
+    x_api_key = normalize_optional_header(x_api_key)
+    x_base_url = normalize_optional_header(x_base_url)
+    x_model = normalize_optional_header(x_model)
+    x_provider_name = normalize_optional_header(x_provider_name)
+    x_idempotency_key = normalize_optional_header(x_idempotency_key)
     trace_id = new_trace_id()
     source_language = normalize_language(data.source_language)
     target_language = normalize_language(data.target_language)
