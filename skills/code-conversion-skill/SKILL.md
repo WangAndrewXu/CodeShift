@@ -40,6 +40,8 @@ Do not use this skill when:
   - `rule_match_type`
   - `message`
   - `rule`
+  - `warnings`
+  - `capability_hint`
   - `service_version`
   - `trace_id`
 - On failures, also preserve `error_code` if present.
