@@ -3,7 +3,7 @@
 CodeShift is a small full-stack code conversion prototype.
 
 - Frontend: Next.js app for entering code, choosing source and target languages, and testing provider settings
-- Backend: FastAPI service with a narrow rule-based converter and an OpenAI-compatible fallback
+- Backend: FastAPI service with a lightweight rule-based converter and an OpenAI-compatible fallback
 
 ## Repository Layout
 
@@ -15,9 +15,13 @@ codeshift-backend/    FastAPI API
 ## Current Capabilities
 
 - Detects `python`, `cpp`, `java`, and `javascript` from filenames
-- Applies a limited rule-based conversion path for simple `greet(...)` examples
-- Falls back to an OpenAI-compatible Responses API call when no rule matches
-- Lets users store provider settings in browser local storage
+- Applies lightweight rule-based conversion for:
+  - simple string variables
+  - direct print/log statements
+  - basic `greet(...)` examples
+  - simple string concatenation
+- Falls back to an OpenAI-compatible Responses API call when no lightweight rule matches
+- Keeps provider API keys in memory for the current browser session instead of persisting them to local storage
 
 ## Local Development
 
@@ -51,9 +55,23 @@ Optional environment variables:
 
 - `NEXT_PUBLIC_API_URL`: backend base URL, defaults to `http://127.0.0.1:8000`
 
+## Deployment Notes
+
+- Frontend preview deployments are currently handled by Vercel
+- The current live demo is [code-shift-sigma.vercel.app](https://code-shift-sigma.vercel.app)
+- For deployed environments, set `CODESHIFT_ALLOWED_ORIGINS` to include every frontend origin that should call the backend
+
+## Validation
+
+```bash
+cd codeshift-frontend && npm run lint
+cd codeshift-frontend && npm run build
+python3 -m py_compile codeshift-backend/main.py
+cd codeshift-backend && python3 -m unittest -v
+```
+
 ## Known Gaps
 
-- No automated tests yet
 - No CI workflow yet
-- Rule-based conversion only handles a very narrow example shape
-- Provider credentials are stored in browser local storage, which is convenient but weak for shared machines
+- Rule-based conversion still covers only lightweight code patterns
+- Anything outside the supported lightweight patterns relies on AI fallback
