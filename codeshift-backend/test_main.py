@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -19,6 +20,15 @@ from app.runtime_store import (
     save_idempotency_record,
 )
 from app.schemas import PrintOperation, RuleProgram
+
+
+SNAPSHOT_PATH = Path(__file__).resolve().parent / "contract_snapshots" / "v1.3.json"
+with open(SNAPSHOT_PATH, "r", encoding="utf-8") as handle:
+    CONTRACT_SNAPSHOT = json.load(handle)
+
+
+def assert_required_keys(testcase: unittest.TestCase, payload: dict, expected_keys: list[str]):
+    testcase.assertEqual(set(payload.keys()), set(expected_keys))
 
 
 class RuleProgramTests(unittest.TestCase):
@@ -117,10 +127,12 @@ class ApiContractTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["service_version"], "v1.3")
-        self.assertIn("IDEMPOTENCY_KEY_REUSED", payload["error_codes"])
-        self.assertEqual(payload["request_log_retention_days"], 7)
-        self.assertEqual(payload["idempotency_ttl_days"], 3)
+        snapshot = CONTRACT_SNAPSHOT["capabilities"]
+        assert_required_keys(self, payload, snapshot["required_keys"])
+        for key, value in snapshot["expected_values"].items():
+            self.assertEqual(payload[key], value)
+        for error_code in snapshot["required_error_codes"]:
+            self.assertIn(error_code, payload["error_codes"])
 
     def test_convert_replays_response_for_same_idempotency_key(self):
         request_body = {
@@ -144,6 +156,49 @@ class ApiContractTests(unittest.TestCase):
         self.assertTrue(second_payload["idempotent_replay"])
         self.assertEqual(first_payload["converted_code"], second_payload["converted_code"])
         self.assertIn("Response replayed from idempotency store.", second_payload["warnings"])
+
+    def test_convert_returns_snapshot_shape_for_success_response(self):
+        request_body = {
+            "code": 'name = "Alice"\nprint("Hello, " + name)\n',
+            "filename": "demo.py",
+            "source_language": "python",
+            "target_language": "javascript",
+            "allow_ai_fallback": False,
+        }
+        headers = {"X-Idempotency-Key": "ci-contract-check"}
+
+        response = self.client.post("/v1/convert", json=request_body, headers=headers)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        snapshot = CONTRACT_SNAPSHOT["convert"]
+        assert_required_keys(self, payload, snapshot["success_required_keys"])
+        self.assertTrue(payload["trace_id"].startswith("trace_"))
+        self.assertTrue(payload["success"])
+        for key, value in snapshot["success_example"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_convert_returns_snapshot_shape_for_rule_only_failure(self):
+        request_body = {
+            "code": 'print("Hello, " + get_name())\n',
+            "filename": "demo.py",
+            "source_language": "python",
+            "target_language": "javascript",
+            "allow_ai_fallback": False,
+        }
+
+        response = self.client.post("/v1/convert", json=request_body)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        snapshot = CONTRACT_SNAPSHOT["convert"]
+        assert_required_keys(self, payload, snapshot["failure_required_keys"])
+        self.assertTrue(payload["trace_id"].startswith("trace_"))
+        self.assertFalse(payload["success"])
+        self.assertIn("Try a simpler print/log example", payload["message"])
+        self.assertTrue(payload["capability_hint"])
+        for key, value in snapshot["failure_example"].items():
+            self.assertEqual(payload[key], value)
 
     def test_convert_rejects_reused_key_for_different_request(self):
         headers = {"X-Idempotency-Key": "convert-demo-2"}
@@ -265,7 +320,7 @@ class RuntimeStoreTests(unittest.TestCase):
                     "service_version": "v1.3",
                     "warnings": [],
                     "trace_id": "trace_123",
-                    "converted_code": "console.log(\"hi\");",
+                    "converted_code": 'console.log("hi");',
                     "source_language": "python",
                     "target_language": "javascript",
                     "filename": "demo.py",
