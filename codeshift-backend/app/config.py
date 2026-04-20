@@ -19,3 +19,24 @@ def get_storage_dir():
         return configured
 
     return os.path.join(tempfile.gettempdir(), "codeshift-runtime")
+
+
+def _get_positive_int(name: str, default: int):
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+
+    return value if value > 0 else default
+
+
+def get_request_log_retention_days():
+    return _get_positive_int("CODESHIFT_REQUEST_LOG_RETENTION_DAYS", 7)
+
+
+def get_idempotency_ttl_days():
+    return _get_positive_int("CODESHIFT_IDEMPOTENCY_TTL_DAYS", 3)
