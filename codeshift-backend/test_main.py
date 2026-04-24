@@ -22,7 +22,7 @@ from app.runtime_store import (
 from app.schemas import PrintOperation, RuleProgram
 
 
-SNAPSHOT_PATH = Path(__file__).resolve().parent / "contract_snapshots" / "v1.3.json"
+SNAPSHOT_PATH = Path(__file__).resolve().parent / "contract_snapshots" / "v1.4.json"
 with open(SNAPSHOT_PATH, "r", encoding="utf-8") as handle:
     CONTRACT_SNAPSHOT = json.load(handle)
 
@@ -115,6 +115,9 @@ class ApiContractTests(unittest.TestCase):
                 "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
                 "CODESHIFT_REQUEST_LOG_RETENTION_DAYS": "7",
                 "CODESHIFT_IDEMPOTENCY_TTL_DAYS": "3",
+                "CODESHIFT_CONVERT_REQUESTS_PER_MINUTE": "20",
+                "CODESHIFT_PROVIDER_TEST_REQUESTS_PER_MINUTE": "10",
+                "CODESHIFT_RATE_LIMIT_WINDOW_SECONDS": "60",
             },
             clear=False,
         )
@@ -122,7 +125,7 @@ class ApiContractTests(unittest.TestCase):
         self.addCleanup(self.env_patch.stop)
         self.client = TestClient(app)
 
-    def test_capabilities_reports_v13_contract(self):
+    def test_capabilities_reports_v14_contract(self):
         response = self.client.get("/v1/capabilities")
 
         self.assertEqual(response.status_code, 200)
@@ -133,6 +136,8 @@ class ApiContractTests(unittest.TestCase):
             self.assertEqual(payload[key], value)
         for error_code in snapshot["required_error_codes"]:
             self.assertIn(error_code, payload["error_codes"])
+        for provider_name in snapshot["required_provider_names"]:
+            self.assertIn(provider_name, payload["allowed_provider_names"])
 
     def test_convert_replays_response_for_same_idempotency_key(self):
         request_body = {
@@ -198,6 +203,157 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("Try a simpler print/log example", payload["message"])
         self.assertTrue(payload["capability_hint"])
         for key, value in snapshot["failure_example"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_convert_rejects_unknown_provider_name(self):
+        request_body = {
+            "code": 'print("hi")\n',
+            "filename": "demo.py",
+            "source_language": "python",
+            "target_language": "javascript",
+            "allow_ai_fallback": True,
+        }
+
+        response = self.client.post(
+            "/v1/convert",
+            json=request_body,
+            headers={"X-Provider-Name": "anthropic"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        for key, value in CONTRACT_SNAPSHOT["convert"]["provider_policy_failure"].items():
+            self.assertEqual(payload[key], value)
+        self.assertIn("Allowed provider names", payload["capability_hint"])
+
+    def test_convert_rate_limits_excessive_requests(self):
+        with patch.dict(
+            os.environ,
+            {
+                "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
+                "CODESHIFT_CONVERT_REQUESTS_PER_MINUTE": "1",
+                "CODESHIFT_RATE_LIMIT_WINDOW_SECONDS": "60",
+            },
+            clear=False,
+        ):
+            request_body = {
+                "code": 'print("hi")\n',
+                "filename": "demo.py",
+                "source_language": "python",
+                "target_language": "javascript",
+                "allow_ai_fallback": False,
+            }
+            self.client.post("/v1/convert", json=request_body)
+            response = self.client.post("/v1/convert", json=request_body)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        for key, value in CONTRACT_SNAPSHOT["convert"]["rate_limit_failure"].items():
+            self.assertEqual(payload[key], value)
+        self.assertIn("Retry after", payload["message"])
+
+    def test_provider_test_rate_limits_excessive_requests(self):
+        with patch.dict(
+            os.environ,
+            {
+                "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
+                "CODESHIFT_PROVIDER_TEST_REQUESTS_PER_MINUTE": "1",
+                "CODESHIFT_RATE_LIMIT_WINDOW_SECONDS": "60",
+            },
+            clear=False,
+        ):
+            self.client.post("/test-provider")
+            response = self.client.post("/test-provider")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["error_code"], "RATE_LIMIT_EXCEEDED")
+        assert_required_keys(self, payload, CONTRACT_SNAPSHOT["provider_test"]["failure_required_keys"])
+        for key, value in CONTRACT_SNAPSHOT["provider_test"]["rate_limit_failure"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_provider_test_returns_snapshot_shape_for_success_response(self):
+        with patch("app.api.test_ai_connection", return_value=(True, "Connection successful via openai using model gpt-5.4-mini.")):
+            response = self.client.post(
+                "/test-provider",
+                headers={
+                    "X-API-Key": "test-key",
+                    "X-Base-URL": "https://api.openai.com/v1",
+                    "X-Model": "gpt-5.4-mini",
+                    "X-Provider-Name": "openai",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        snapshot = CONTRACT_SNAPSHOT["provider_test"]
+        assert_required_keys(self, payload, snapshot["success_required_keys"])
+        self.assertTrue(payload["trace_id"].startswith("trace_"))
+        self.assertEqual(payload["message"], "Connection successful via openai using model gpt-5.4-mini.")
+        self.assertEqual(payload["warnings"], [])
+        self.assertEqual(payload["capability_hint"], "")
+        for key, value in snapshot["success_example"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_provider_test_returns_snapshot_shape_for_policy_failure(self):
+        response = self.client.post(
+            "/test-provider",
+            headers={"X-Provider-Name": "anthropic"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        snapshot = CONTRACT_SNAPSHOT["provider_test"]
+        assert_required_keys(self, payload, snapshot["failure_required_keys"])
+        self.assertTrue(payload["trace_id"].startswith("trace_"))
+        self.assertIn("Allowed provider names", payload["capability_hint"])
+        for key, value in snapshot["provider_policy_failure"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_provider_test_returns_snapshot_shape_for_generic_failure(self):
+        response = self.client.post("/test-provider")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        snapshot = CONTRACT_SNAPSHOT["provider_test"]
+        assert_required_keys(self, payload, snapshot["failure_required_keys"])
+        self.assertTrue(payload["trace_id"].startswith("trace_"))
+        self.assertEqual(payload["message"], "No API key was provided.")
+        self.assertIn("Check API key", payload["capability_hint"])
+        for key, value in snapshot["failure_example"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_load_file_returns_snapshot_shape_for_success_response(self):
+        response = self.client.post(
+            "/load-file",
+            files={"file": ("demo.py", b'print("hi")\n', "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        snapshot = CONTRACT_SNAPSHOT["load_file"]
+        assert_required_keys(self, payload, snapshot["success_required_keys"])
+        self.assertTrue(payload["trace_id"].startswith("trace_"))
+        self.assertEqual(payload["warnings"], [])
+        self.assertEqual(payload["message"], "")
+        self.assertEqual(payload["capability_hint"], "")
+        for key, value in snapshot["success_example"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_load_file_returns_snapshot_shape_for_invalid_utf8_failure(self):
+        response = self.client.post(
+            "/load-file",
+            files={"file": ("demo.py", b"\xff\xfe\xfd", "application/octet-stream")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        snapshot = CONTRACT_SNAPSHOT["load_file"]
+        assert_required_keys(self, payload, snapshot["failure_required_keys"])
+        self.assertTrue(payload["trace_id"].startswith("trace_"))
+        self.assertEqual(payload["message"], "This file is not valid UTF-8 text.")
+        self.assertEqual(payload["warnings"], [])
+        for key, value in snapshot["invalid_utf8_failure"].items():
             self.assertEqual(payload[key], value)
 
     def test_convert_rejects_reused_key_for_different_request(self):
@@ -279,7 +435,7 @@ class RuntimeStoreTests(unittest.TestCase):
                 "success": True,
                 "error_code": "",
                 "execution_mode": "rule_based",
-                "service_version": "v1.3",
+                "service_version": "v1.4",
                 "request": {"code_sha256": "old", "code_length": 1},
                 "metadata": {},
             }
@@ -292,7 +448,7 @@ class RuntimeStoreTests(unittest.TestCase):
                 "success": True,
                 "error_code": "",
                 "execution_mode": "rule_based",
-                "service_version": "v1.3",
+                "service_version": "v1.4",
                 "request": {"code_sha256": "new", "code_length": 1},
                 "metadata": {},
             }
@@ -317,7 +473,7 @@ class RuntimeStoreTests(unittest.TestCase):
                     "message": "ok",
                     "error_code": "",
                     "capability_hint": "",
-                    "service_version": "v1.3",
+                    "service_version": "v1.4",
                     "warnings": [],
                     "trace_id": "trace_123",
                     "converted_code": 'console.log("hi");',
