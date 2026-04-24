@@ -8,6 +8,7 @@ on:
       - codex/skill-api-v1
       - codex/skill-api-v1-3
       - codex/skill-api-v1-4
+      - codex/provider-policy-rate-limit
 
 jobs:
   backend:
@@ -34,39 +35,77 @@ jobs:
         run: |
           cd codeshift-backend
           python3 - <<'PY'
-          import asyncio
           import json
+          import os
+          import tempfile
           from pathlib import Path
-          from app.api import capabilities, convert_code
-          from app.schemas import ConvertRequest
+          from unittest.mock import patch
 
-          with open(Path("contract_snapshots") / "v1.3.json", "r", encoding="utf-8") as handle:
+          from fastapi.testclient import TestClient
+
+          from app.api import app
+
+          with open(Path("contract_snapshots") / "v1.4.json", "r", encoding="utf-8") as handle:
               snapshot = json.load(handle)
 
-          capabilities_payload = asyncio.run(capabilities()).model_dump(mode="json")
+          os.environ["CODESHIFT_STORAGE_DIR"] = tempfile.mkdtemp(prefix="codeshift-ci-")
+          client = TestClient(app)
+
+          capabilities_payload = client.get("/v1/capabilities").json()
           assert set(capabilities_payload.keys()) == set(snapshot["capabilities"]["required_keys"])
           for key, value in snapshot["capabilities"]["expected_values"].items():
               assert capabilities_payload[key] == value
           for error_code in snapshot["capabilities"]["required_error_codes"]:
               assert error_code in capabilities_payload["error_codes"]
+          for provider_name in snapshot["capabilities"]["required_provider_names"]:
+              assert provider_name in capabilities_payload["allowed_provider_names"]
 
-          convert_payload = asyncio.run(
-              convert_code(
-                  ConvertRequest(
-                      code='name = "Alice"\\nprint("Hello, " + name)\\n',
-                      filename="demo.py",
-                      source_language="python",
-                      target_language="javascript",
-                      allow_ai_fallback=False,
-                  ),
-                  x_idempotency_key="ci-contract-check",
-              )
-          ).model_dump(mode="json")
+          convert_payload = client.post(
+              "/v1/convert",
+              json={
+                  "code": 'name = "Alice"\\nprint("Hello, " + name)\\n',
+                  "filename": "demo.py",
+                  "source_language": "python",
+                  "target_language": "javascript",
+                  "allow_ai_fallback": False,
+              },
+              headers={"X-Idempotency-Key": "ci-contract-check"},
+          ).json()
           assert set(convert_payload.keys()) == set(snapshot["convert"]["success_required_keys"])
           for key, value in snapshot["convert"]["success_example"].items():
               assert convert_payload[key] == value
           assert convert_payload["success"] is True
           assert convert_payload["trace_id"].startswith("trace_")
+
+          load_file_payload = client.post(
+              "/load-file",
+              files={"file": ("demo.py", b'print(\"hi\")\\n', "text/plain")},
+          ).json()
+          assert set(load_file_payload.keys()) == set(snapshot["load_file"]["success_required_keys"])
+          for key, value in snapshot["load_file"]["success_example"].items():
+              assert load_file_payload[key] == value
+          assert load_file_payload["trace_id"].startswith("trace_")
+
+          provider_failure_payload = client.post("/test-provider").json()
+          assert set(provider_failure_payload.keys()) == set(snapshot["provider_test"]["failure_required_keys"])
+          for key, value in snapshot["provider_test"]["failure_example"].items():
+              assert provider_failure_payload[key] == value
+          assert provider_failure_payload["trace_id"].startswith("trace_")
+
+          with patch("app.api.test_ai_connection", return_value=(True, "Connection successful via openai using model gpt-5.4-mini.")):
+              provider_success_payload = client.post(
+                  "/test-provider",
+                  headers={
+                      "X-API-Key": "test-key",
+                      "X-Base-URL": "https://api.openai.com/v1",
+                      "X-Model": "gpt-5.4-mini",
+                      "X-Provider-Name": "openai",
+                  },
+              ).json()
+          assert set(provider_success_payload.keys()) == set(snapshot["provider_test"]["success_required_keys"])
+          for key, value in snapshot["provider_test"]["success_example"].items():
+              assert provider_success_payload[key] == value
+          assert provider_success_payload["trace_id"].startswith("trace_")
           PY
 
   frontend:
