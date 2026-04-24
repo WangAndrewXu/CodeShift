@@ -31,7 +31,7 @@ skills/code-conversion-skill/       Agent-facing skill package and references
   - `POST /v1/convert`
   - `POST /test-provider`
 - Supports optional `X-Idempotency-Key` on conversion requests
-- Writes file-backed request logs and idempotency records under `CODESHIFT_STORAGE_DIR`
+- Writes file-backed request logs, idempotency records, and rate-limit buckets under `CODESHIFT_STORAGE_DIR`
 
 ## Skill/API Contract
 
@@ -45,11 +45,11 @@ Supporting references:
 - [skills/code-conversion-skill/references/supported-patterns.md](skills/code-conversion-skill/references/supported-patterns.md)
 - [skills/code-conversion-skill/references/failure-modes.md](skills/code-conversion-skill/references/failure-modes.md)
 - [skills/code-conversion-skill/references/examples.md](skills/code-conversion-skill/references/examples.md)
-- [codeshift-backend/contract_snapshots/v1.3.json](codeshift-backend/contract_snapshots/v1.3.json) as the machine-readable contract snapshot
+- [codeshift-backend/contract_snapshots/v1.4.json](codeshift-backend/contract_snapshots/v1.4.json) as the machine-readable contract snapshot
 
 Current service contract version:
 
-- `service_version = v1.3`
+- `service_version = v1.4`
 
 Current `GET /v1/capabilities` includes:
 
@@ -58,6 +58,8 @@ Current `GET /v1/capabilities` includes:
 - capability hint text
 - request log retention days
 - idempotency TTL days
+- allowed provider names and base URL prefixes
+- current rate-limit defaults
 
 Current `POST /v1/convert` includes:
 
@@ -70,6 +72,12 @@ Current `POST /v1/convert` includes:
 - `error_code` on failures
 - `idempotency_key`
 - `idempotent_replay`
+- provider-policy and rate-limit rejection modes
+
+Current snapshot-backed contract coverage also includes:
+
+- `POST /test-provider` success and failure response shapes
+- `POST /load-file` success and invalid UTF-8 failure response shapes
 
 ## Local Development
 
@@ -93,6 +101,11 @@ Environment variables:
 - `CODESHIFT_STORAGE_DIR`: optional runtime storage directory for logs and idempotency cache
 - `CODESHIFT_REQUEST_LOG_RETENTION_DAYS`: optional request-log retention window, defaults to `7`
 - `CODESHIFT_IDEMPOTENCY_TTL_DAYS`: optional idempotency cache TTL, defaults to `3`
+- `CODESHIFT_ALLOWED_PROVIDER_NAMES`: optional provider-name allowlist
+- `CODESHIFT_ALLOWED_BASE_URL_PREFIXES`: optional base-URL prefix allowlist
+- `CODESHIFT_CONVERT_REQUESTS_PER_MINUTE`: optional convert request rate limit, defaults to `20`
+- `CODESHIFT_PROVIDER_TEST_REQUESTS_PER_MINUTE`: optional provider test rate limit, defaults to `10`
+- `CODESHIFT_RATE_LIMIT_WINDOW_SECONDS`: optional rate-limit window, defaults to `60`
 
 ### Frontend
 
@@ -114,11 +127,13 @@ Default contents under `CODESHIFT_STORAGE_DIR`:
 
 - `logs/requests.jsonl`: request event log
 - `idempotency/*.json`: idempotency cache records
+- `rate_limits/*.json`: rate-limit buckets
 
 Storage policy:
 
 - request logs are pruned by retention window
 - idempotency records expire by TTL and are deleted on access/prune
+- rate-limit buckets are file-backed and scoped to the backend instance
 - request logs store `code_sha256` and `code_length`, not raw source code
 
 ## Deployment Notes
@@ -140,11 +155,11 @@ cd codeshift-backend && python3 -m unittest -v
 
 ## CI
 
-GitHub Actions currently runs `Skill API Checks` for the skill/API branch work. The backend and frontend checks include snapshot-based contract regression checks before merge.
+GitHub Actions currently runs `Skill API Checks` for the skill/API branch work. The backend and frontend checks include snapshot-based contract regression checks before merge for `/v1/capabilities`, `/v1/convert`, `/test-provider`, and `/load-file`.
 
 ## Known Gaps
 
 - Rule-based conversion still covers only lightweight code patterns
 - Anything outside the supported lightweight patterns relies on AI fallback
 - Runtime storage is file-backed and local to the deployed backend instance; it is not yet suitable for multi-instance coordination
-- The API contract is stabilized, but provider policy, rate limiting, and durable request tracing still need deeper work for broad multi-agent adoption
+- Provider policy and basic rate limiting are now in place, but durable request tracing and multi-instance enforcement still need deeper work for broad multi-agent adoption
