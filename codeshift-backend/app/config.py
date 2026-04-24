@@ -40,3 +40,41 @@ def get_request_log_retention_days():
 
 def get_idempotency_ttl_days():
     return _get_positive_int("CODESHIFT_IDEMPOTENCY_TTL_DAYS", 3)
+
+
+def get_convert_requests_per_minute():
+    return _get_positive_int("CODESHIFT_CONVERT_REQUESTS_PER_MINUTE", 20)
+
+
+def get_provider_test_requests_per_minute():
+    return _get_positive_int("CODESHIFT_PROVIDER_TEST_REQUESTS_PER_MINUTE", 10)
+
+
+def get_rate_limit_window_seconds():
+    return _get_positive_int("CODESHIFT_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def get_allowed_provider_names():
+    raw = os.getenv("CODESHIFT_ALLOWED_PROVIDER_NAMES", "").strip()
+    if raw:
+        return [value.strip().lower() for value in raw.split(",") if value.strip()]
+
+    return ["openai", "openai-compatible", "openrouter"]
+
+
+def get_allowed_base_url_prefixes():
+    raw = os.getenv("CODESHIFT_ALLOWED_BASE_URL_PREFIXES", "").strip()
+    values: list[str] = []
+    if raw:
+        values.extend([value.strip() for value in raw.split(",") if value.strip()])
+    else:
+        values.extend([
+            "https://api.openai.com/v1",
+            "https://openrouter.ai/api/v1",
+        ])
+
+    configured_base = os.getenv("OPENAI_BASE_URL", "").strip()
+    if configured_base and configured_base not in values:
+        values.append(configured_base)
+
+    return values
