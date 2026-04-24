@@ -25,6 +25,11 @@ class CapabilityResponse(BaseModel):
     capability_hint: str
     request_log_retention_days: int
     idempotency_ttl_days: int
+    allowed_provider_names: list[str]
+    allowed_base_url_prefixes: list[str]
+    convert_requests_per_minute: int
+    provider_test_requests_per_minute: int
+    rate_limit_window_seconds: int
 
 
 class BaseSkillResponse(BaseModel):
@@ -60,6 +65,8 @@ class ConvertResponse(BaseSkillResponse):
         "ai_fallback",
         "ai_fallback_failed",
         "idempotency_conflict",
+        "provider_policy_rejected",
+        "rate_limited",
     ]
     rule_match_type: str = ""
     rule: str = ""
