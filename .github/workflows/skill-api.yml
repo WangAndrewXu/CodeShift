@@ -79,8 +79,7 @@ jobs:
 
           load_file_payload = client.post(
               "/load-file",
-              files={"file": ("demo.py", b'print(\"hi\")
-', "text/plain")},
+              files={"file": ("demo.py", b'print(\"hi\")' + b'\n', "text/plain")},
           ).json()
           assert set(load_file_payload.keys()) == set(snapshot["load_file"]["success_required_keys"])
           for key, value in snapshot["load_file"]["success_example"].items():
