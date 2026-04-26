@@ -30,6 +30,8 @@ class CapabilityResponse(BaseModel):
     convert_requests_per_minute: int
     provider_test_requests_per_minute: int
     rate_limit_window_seconds: int
+    runtime_storage_backend: str
+    multi_instance_safe: bool
 
 
 class BaseSkillResponse(BaseModel):
@@ -65,6 +67,7 @@ class ConvertResponse(BaseSkillResponse):
         "ai_fallback",
         "ai_fallback_failed",
         "idempotency_conflict",
+        "idempotency_pending",
         "provider_policy_rejected",
         "rate_limited",
     ]

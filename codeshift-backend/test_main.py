@@ -13,16 +13,21 @@ from app.rule_engine import extract_rule_program, render_code
 from app.runtime_store import (
     append_request_log,
     build_idempotency_path,
+    build_request_hash,
     load_idempotency_record,
     now_utc,
     now_utc_iso,
     prune_request_logs,
+    reset_runtime_store_cache,
     save_idempotency_record,
+    reserve_idempotency_key,
+    get_runtime_storage_backend_name,
+    runtime_storage_is_multi_instance_safe,
 )
 from app.schemas import PrintOperation, RuleProgram
 
 
-SNAPSHOT_PATH = Path(__file__).resolve().parent / "contract_snapshots" / "v1.4.json"
+SNAPSHOT_PATH = Path(__file__).resolve().parent / "contract_snapshots" / "v1.5.json"
 with open(SNAPSHOT_PATH, "r", encoding="utf-8") as handle:
     CONTRACT_SNAPSHOT = json.load(handle)
 
@@ -118,14 +123,17 @@ class ApiContractTests(unittest.TestCase):
                 "CODESHIFT_CONVERT_REQUESTS_PER_MINUTE": "20",
                 "CODESHIFT_PROVIDER_TEST_REQUESTS_PER_MINUTE": "10",
                 "CODESHIFT_RATE_LIMIT_WINDOW_SECONDS": "60",
+                "CODESHIFT_RUNTIME_STORE_BACKEND": "filesystem",
             },
             clear=False,
         )
         self.env_patch.start()
+        reset_runtime_store_cache()
+        self.addCleanup(reset_runtime_store_cache)
         self.addCleanup(self.env_patch.stop)
         self.client = TestClient(app)
 
-    def test_capabilities_reports_v14_contract(self):
+    def test_capabilities_reports_v15_contract(self):
         response = self.client.get("/v1/capabilities")
 
         self.assertEqual(response.status_code, 200)
@@ -138,6 +146,8 @@ class ApiContractTests(unittest.TestCase):
             self.assertIn(error_code, payload["error_codes"])
         for provider_name in snapshot["required_provider_names"]:
             self.assertIn(provider_name, payload["allowed_provider_names"])
+        self.assertEqual(payload["runtime_storage_backend"], get_runtime_storage_backend_name())
+        self.assertEqual(payload["multi_instance_safe"], runtime_storage_is_multi_instance_safe())
 
     def test_convert_replays_response_for_same_idempotency_key(self):
         request_body = {
@@ -233,6 +243,7 @@ class ApiContractTests(unittest.TestCase):
                 "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
                 "CODESHIFT_CONVERT_REQUESTS_PER_MINUTE": "1",
                 "CODESHIFT_RATE_LIMIT_WINDOW_SECONDS": "60",
+                "CODESHIFT_RUNTIME_STORE_BACKEND": "filesystem",
             },
             clear=False,
         ):
@@ -259,6 +270,7 @@ class ApiContractTests(unittest.TestCase):
                 "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
                 "CODESHIFT_PROVIDER_TEST_REQUESTS_PER_MINUTE": "1",
                 "CODESHIFT_RATE_LIMIT_WINDOW_SECONDS": "60",
+                "CODESHIFT_RUNTIME_STORE_BACKEND": "filesystem",
             },
             clear=False,
         ):
@@ -356,6 +368,37 @@ class ApiContractTests(unittest.TestCase):
         for key, value in snapshot["invalid_utf8_failure"].items():
             self.assertEqual(payload[key], value)
 
+    def test_convert_returns_pending_for_matching_in_progress_key(self):
+        request_body = {
+            "code": 'print("hi")\n',
+            "filename": "demo.py",
+            "source_language": "python",
+            "target_language": "javascript",
+            "allow_ai_fallback": False,
+        }
+        headers = {"X-Idempotency-Key": "convert-pending-1"}
+        request_hash = build_request_hash(
+            {
+                "request": request_body,
+                "provider": {
+                    "base_url": "",
+                    "model": "",
+                    "provider_name": "",
+                    "api_key_sha256": "",
+                },
+            }
+        )
+        reserved = reserve_idempotency_key(headers["X-Idempotency-Key"], request_hash)
+        self.assertTrue(reserved)
+
+        response = self.client.post("/v1/convert", json=request_body, headers=headers)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        for key, value in CONTRACT_SNAPSHOT["convert"]["pending_failure"].items():
+            self.assertEqual(payload[key], value)
+        self.assertIn("still in progress", payload["message"])
+
     def test_convert_rejects_reused_key_for_different_request(self):
         headers = {"X-Idempotency-Key": "convert-demo-2"}
         first_body = {
@@ -418,10 +461,13 @@ class RuntimeStoreTests(unittest.TestCase):
                 "CODESHIFT_STORAGE_DIR": self.tmpdir.name,
                 "CODESHIFT_REQUEST_LOG_RETENTION_DAYS": "7",
                 "CODESHIFT_IDEMPOTENCY_TTL_DAYS": "3",
+                "CODESHIFT_RUNTIME_STORE_BACKEND": "filesystem",
             },
             clear=False,
         )
         self.env_patch.start()
+        reset_runtime_store_cache()
+        self.addCleanup(reset_runtime_store_cache)
         self.addCleanup(self.env_patch.stop)
 
     def test_prune_request_logs_removes_expired_entries(self):
@@ -435,7 +481,7 @@ class RuntimeStoreTests(unittest.TestCase):
                 "success": True,
                 "error_code": "",
                 "execution_mode": "rule_based",
-                "service_version": "v1.4",
+                "service_version": "v1.5",
                 "request": {"code_sha256": "old", "code_length": 1},
                 "metadata": {},
             }
@@ -448,7 +494,7 @@ class RuntimeStoreTests(unittest.TestCase):
                 "success": True,
                 "error_code": "",
                 "execution_mode": "rule_based",
-                "service_version": "v1.4",
+                "service_version": "v1.5",
                 "request": {"code_sha256": "new", "code_length": 1},
                 "metadata": {},
             }
@@ -473,7 +519,7 @@ class RuntimeStoreTests(unittest.TestCase):
                     "message": "ok",
                     "error_code": "",
                     "capability_hint": "",
-                    "service_version": "v1.4",
+                    "service_version": "v1.5",
                     "warnings": [],
                     "trace_id": "trace_123",
                     "converted_code": 'console.log("hi");',

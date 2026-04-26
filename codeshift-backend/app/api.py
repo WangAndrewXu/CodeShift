@@ -21,9 +21,12 @@ from .runtime_store import (
     append_request_log,
     build_request_hash,
     check_rate_limit,
+    complete_idempotency_record,
+    get_runtime_storage_backend_name,
     load_idempotency_record,
     now_utc_iso,
-    save_idempotency_record,
+    reserve_idempotency_key,
+    runtime_storage_is_multi_instance_safe,
     sha256_text,
 )
 from .rule_engine import (
@@ -63,6 +66,7 @@ ERROR_CODES = [
     "FILE_LOAD_FAILED",
     "PROVIDER_TEST_FAILED",
     "IDEMPOTENCY_KEY_REUSED",
+    "IDEMPOTENCY_KEY_IN_PROGRESS",
     "PROVIDER_POLICY_REJECTED",
     "RATE_LIMIT_EXCEEDED",
 ]
@@ -151,12 +155,10 @@ def maybe_store_idempotent_response(
     if not idempotency_key:
         return
 
-    save_idempotency_record(
+    complete_idempotency_record(
         idempotency_key,
-        {
-            "request_hash": request_hash,
-            "response": as_payload(response),
-        },
+        request_hash,
+        as_payload(response),
     )
 
 
@@ -202,6 +204,8 @@ async def capabilities():
         convert_requests_per_minute=get_convert_requests_per_minute(),
         provider_test_requests_per_minute=get_provider_test_requests_per_minute(),
         rate_limit_window_seconds=get_rate_limit_window_seconds(),
+        runtime_storage_backend=get_runtime_storage_backend_name(),
+        multi_instance_safe=runtime_storage_is_multi_instance_safe(),
     )
 
 
@@ -516,6 +520,33 @@ async def convert_code(
                 )
                 return response
 
+            if existing_record.get("status") == "pending":
+                response = ConvertResponse(
+                    success=False,
+                    converted_code="",
+                    source_language="",
+                    target_language="",
+                    filename="",
+                    message="Another request with this idempotency key is still in progress.",
+                    execution_mode="idempotency_pending",
+                    error_code="IDEMPOTENCY_KEY_IN_PROGRESS",
+                    rule_match_type="",
+                    rule="",
+                    capability_hint="Retry shortly, or use a different idempotency key for a distinct request.",
+                    service_version=SERVICE_VERSION,
+                    warnings=[],
+                    trace_id=trace_id,
+                    **idempotency_response_fields(x_idempotency_key, False),
+                )
+                log_api_event(
+                    "/v1/convert",
+                    trace_id,
+                    response,
+                    request=request_summary,
+                    metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+                )
+                return response
+
             replay_payload = ConvertResponse(**existing_record["response"]).model_dump(mode="json")
             replay_payload.update(idempotency_response_fields(x_idempotency_key, True))
             replay_warnings = list(replay_payload.get("warnings", []))
@@ -532,6 +563,52 @@ async def convert_code(
                 metadata=idempotency_log_metadata(x_idempotency_key, request_hash, True),
             )
             return replay_response
+
+        if not reserve_idempotency_key(x_idempotency_key, request_hash):
+            existing_record = load_idempotency_record(x_idempotency_key)
+            if existing_record and existing_record.get("request_hash") == request_hash and existing_record.get("status") == "completed":
+                replay_payload = ConvertResponse(**existing_record["response"]).model_dump(mode="json")
+                replay_payload.update(idempotency_response_fields(x_idempotency_key, True))
+                replay_warnings = list(replay_payload.get("warnings", []))
+                replay_note = "Response replayed from idempotency store."
+                if replay_note not in replay_warnings:
+                    replay_warnings.append(replay_note)
+                replay_payload["warnings"] = replay_warnings
+                replay_response = ConvertResponse(**replay_payload)
+                log_api_event(
+                    "/v1/convert",
+                    replay_response.trace_id,
+                    replay_response,
+                    request=request_summary,
+                    metadata=idempotency_log_metadata(x_idempotency_key, request_hash, True),
+                )
+                return replay_response
+
+            response = ConvertResponse(
+                success=False,
+                converted_code="",
+                source_language="",
+                target_language="",
+                filename="",
+                message="Another request with this idempotency key is still in progress.",
+                execution_mode="idempotency_pending",
+                error_code="IDEMPOTENCY_KEY_IN_PROGRESS",
+                rule_match_type="",
+                rule="",
+                capability_hint="Retry shortly, or use a different idempotency key for a distinct request.",
+                service_version=SERVICE_VERSION,
+                warnings=[],
+                trace_id=trace_id,
+                **idempotency_response_fields(x_idempotency_key, False),
+            )
+            log_api_event(
+                "/v1/convert",
+                trace_id,
+                response,
+                request=request_summary,
+                metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+            )
+            return response
 
     program = extract_rule_program(data.code, source_language)
 
