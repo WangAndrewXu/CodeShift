@@ -44,6 +44,12 @@ def get_idempotency_dir():
     return path
 
 
+def get_rate_limit_dir():
+    path = os.path.join(get_storage_dir(), "rate_limits")
+    _ensure_dir(path)
+    return path
+
+
 def sha256_text(value: str):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -96,6 +102,11 @@ def build_idempotency_path(idempotency_key: str):
     return os.path.join(get_idempotency_dir(), f"{sha256_text(idempotency_key)}.json")
 
 
+def build_rate_limit_path(bucket: str, key: str):
+    filename = f"{bucket}-{sha256_text(key)}.json"
+    return os.path.join(get_rate_limit_dir(), filename)
+
+
 def prune_idempotency_records():
     idempotency_dir = get_idempotency_dir()
     now = now_utc()
@@ -143,3 +154,38 @@ def save_idempotency_record(idempotency_key: str, record: dict):
     }
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, sort_keys=True, indent=2, default=_json_default)
+
+
+def check_rate_limit(bucket: str, key: str, *, max_requests: int, window_seconds: int):
+    path = build_rate_limit_path(bucket, key)
+    now = now_utc()
+    cutoff = now - timedelta(seconds=window_seconds)
+    timestamps: list[str] = []
+
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            raw_timestamps = payload.get("timestamps", [])
+            timestamps = [
+                timestamp
+                for timestamp in raw_timestamps
+                if parse_utc_iso(timestamp) >= cutoff
+            ]
+        except (OSError, ValueError, json.JSONDecodeError, KeyError):
+            timestamps = []
+
+    allowed = len(timestamps) < max_requests
+    if allowed:
+        timestamps.append(now.isoformat())
+
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"timestamps": timestamps}, handle, sort_keys=True, indent=2)
+
+    return {
+        "allowed": allowed,
+        "limit": max_requests,
+        "remaining": max(0, max_requests - len(timestamps)),
+        "window_seconds": window_seconds,
+        "retry_after_seconds": 0 if allowed else window_seconds,
+    }

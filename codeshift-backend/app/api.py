@@ -1,19 +1,26 @@
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Header, UploadFile
+from fastapi import FastAPI, File, Header, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Header as HeaderParam
 from pydantic import BaseModel
 
 from .config import (
+    get_allowed_base_url_prefixes,
     get_allowed_origins,
+    get_allowed_provider_names,
+    get_convert_requests_per_minute,
     get_idempotency_ttl_days,
+    get_provider_test_requests_per_minute,
+    get_rate_limit_window_seconds,
     get_request_log_retention_days,
 )
+from .provider_policy import build_provider_policy_hint, validate_provider_request
 from .providers import ai_convert_fallback, test_ai_connection
 from .runtime_store import (
     append_request_log,
     build_request_hash,
+    check_rate_limit,
     load_idempotency_record,
     now_utc_iso,
     save_idempotency_record,
@@ -56,6 +63,8 @@ ERROR_CODES = [
     "FILE_LOAD_FAILED",
     "PROVIDER_TEST_FAILED",
     "IDEMPOTENCY_KEY_REUSED",
+    "PROVIDER_POLICY_REJECTED",
+    "RATE_LIMIT_EXCEEDED",
 ]
 
 
@@ -84,6 +93,30 @@ def summarize_code_payload(code: str):
         "code_sha256": sha256_text(code),
         "code_length": len(code),
     }
+
+
+def build_client_fingerprint(
+    request: Request,
+    *,
+    provider_name: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+):
+    parts = [request.client.host if request.client else "unknown"]
+    if provider_name:
+        parts.append(provider_name.strip().lower())
+    if base_url:
+        parts.append(base_url.strip())
+    if api_key:
+        parts.append(sha256_text(api_key))
+    return "|".join(parts)
+
+
+def build_rate_limit_warning(limit_result: dict):
+    return (
+        f"Rate limit reached. Retry after {limit_result['retry_after_seconds']} seconds "
+        f"within a {limit_result['window_seconds']}-second window."
+    )
 
 
 def log_api_event(
@@ -164,6 +197,11 @@ async def capabilities():
         capability_hint=build_capability_hint(),
         request_log_retention_days=get_request_log_retention_days(),
         idempotency_ttl_days=get_idempotency_ttl_days(),
+        allowed_provider_names=get_allowed_provider_names(),
+        allowed_base_url_prefixes=get_allowed_base_url_prefixes(),
+        convert_requests_per_minute=get_convert_requests_per_minute(),
+        provider_test_requests_per_minute=get_provider_test_requests_per_minute(),
+        rate_limit_window_seconds=get_rate_limit_window_seconds(),
     )
 
 
@@ -233,6 +271,7 @@ async def load_file(file: UploadFile = File(...)):
 
 @app.post("/test-provider", response_model=ProviderTestResponse)
 async def test_provider(
+    request: Request,
     x_api_key: str | None = Header(default=None),
     x_base_url: str | None = Header(default=None),
     x_model: str | None = Header(default=None),
@@ -243,6 +282,70 @@ async def test_provider(
     x_model = normalize_optional_header(x_model)
     x_provider_name = normalize_optional_header(x_provider_name)
     trace_id = new_trace_id()
+
+    allowed, policy_message = validate_provider_request(x_provider_name, x_base_url)
+    if not allowed:
+        response = ProviderTestResponse(
+            success=False,
+            message=policy_message,
+            error_code="PROVIDER_POLICY_REJECTED",
+            provider_name=x_provider_name or "",
+            model=x_model or "",
+            base_url=x_base_url or "",
+            capability_hint=build_provider_policy_hint(),
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
+        )
+        log_api_event(
+            "/test-provider",
+            trace_id,
+            response,
+            metadata={
+                "provider_name": x_provider_name or "",
+                "base_url": x_base_url or "",
+                "policy_rejected": True,
+            },
+        )
+        return response
+
+    fingerprint = build_client_fingerprint(
+        request,
+        provider_name=x_provider_name,
+        base_url=x_base_url,
+        api_key=x_api_key,
+    )
+    rate_result = check_rate_limit(
+        "provider-test",
+        fingerprint,
+        max_requests=get_provider_test_requests_per_minute(),
+        window_seconds=get_rate_limit_window_seconds(),
+    )
+    if not rate_result["allowed"]:
+        response = ProviderTestResponse(
+            success=False,
+            message=build_rate_limit_warning(rate_result),
+            error_code="RATE_LIMIT_EXCEEDED",
+            provider_name=x_provider_name or "",
+            model=x_model or "",
+            base_url=x_base_url or "",
+            capability_hint="Wait for the current rate-limit window to reset before retrying.",
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
+        )
+        log_api_event(
+            "/test-provider",
+            trace_id,
+            response,
+            metadata={
+                "provider_name": x_provider_name or "",
+                "base_url": x_base_url or "",
+                "rate_limit": rate_result,
+            },
+        )
+        return response
+
     success, message = test_ai_connection(
         api_key=x_api_key,
         base_url=x_base_url,
@@ -271,6 +374,7 @@ async def test_provider(
             "model": x_model or "",
             "base_url": x_base_url or "",
             "api_key_present": bool(x_api_key),
+            "rate_limit": rate_result,
         },
     )
     return response
@@ -280,6 +384,7 @@ async def test_provider(
 @app.post("/v1/convert", response_model=ConvertResponse)
 async def convert_code(
     data: ConvertRequest,
+    request: Request,
     x_api_key: str | None = Header(default=None),
     x_base_url: str | None = Header(default=None),
     x_model: str | None = Header(default=None),
@@ -301,6 +406,74 @@ async def convert_code(
         "allow_ai_fallback": data.allow_ai_fallback,
         **summarize_code_payload(data.code),
     }
+
+    allowed, policy_message = validate_provider_request(x_provider_name, x_base_url)
+    if not allowed:
+        response = ConvertResponse(
+            success=False,
+            converted_code="",
+            source_language="",
+            target_language="",
+            filename="",
+            message=policy_message,
+            execution_mode="provider_policy_rejected",
+            error_code="PROVIDER_POLICY_REJECTED",
+            rule_match_type="",
+            rule="",
+            capability_hint=build_provider_policy_hint(),
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
+            **idempotency_response_fields(x_idempotency_key, False),
+        )
+        log_api_event(
+            "/v1/convert",
+            trace_id,
+            response,
+            request=request_summary,
+            metadata={"provider_name": x_provider_name or "", "base_url": x_base_url or ""},
+        )
+        return response
+
+    fingerprint = build_client_fingerprint(
+        request,
+        provider_name=x_provider_name,
+        base_url=x_base_url,
+        api_key=x_api_key,
+    )
+    rate_result = check_rate_limit(
+        "convert",
+        fingerprint,
+        max_requests=get_convert_requests_per_minute(),
+        window_seconds=get_rate_limit_window_seconds(),
+    )
+    if not rate_result["allowed"]:
+        response = ConvertResponse(
+            success=False,
+            converted_code="",
+            source_language="",
+            target_language="",
+            filename="",
+            message=build_rate_limit_warning(rate_result),
+            execution_mode="rate_limited",
+            error_code="RATE_LIMIT_EXCEEDED",
+            rule_match_type="",
+            rule="",
+            capability_hint="Wait for the rate-limit window to reset or reduce request frequency.",
+            service_version=SERVICE_VERSION,
+            warnings=[],
+            trace_id=trace_id,
+            **idempotency_response_fields(x_idempotency_key, False),
+        )
+        log_api_event(
+            "/v1/convert",
+            trace_id,
+            response,
+            request=request_summary,
+            metadata={"rate_limit": rate_result},
+        )
+        return response
+
     request_hash = build_request_hash(
         {
             "request": data.model_dump(mode="json"),
@@ -320,6 +493,9 @@ async def convert_code(
                 response = ConvertResponse(
                     success=False,
                     converted_code="",
+                    source_language="",
+                    target_language="",
+                    filename="",
                     message="This idempotency key was already used with a different convert request.",
                     execution_mode="idempotency_conflict",
                     error_code="IDEMPOTENCY_KEY_REUSED",
@@ -386,7 +562,7 @@ async def convert_code(
                 trace_id,
                 response,
                 request=request_summary,
-                metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+                metadata={**idempotency_log_metadata(x_idempotency_key, request_hash, False), "rate_limit": rate_result},
             )
             return response
 
@@ -394,6 +570,9 @@ async def convert_code(
         response = ConvertResponse(
             success=False,
             converted_code="",
+            source_language="",
+            target_language="",
+            filename="",
             message=(
                 "No lightweight rule matched this code, and AI fallback is turned off. "
                 "Try a simpler print/log example or enable AI fallback."
@@ -417,7 +596,7 @@ async def convert_code(
             trace_id,
             response,
             request=request_summary,
-            metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+            metadata={**idempotency_log_metadata(x_idempotency_key, request_hash, False), "rate_limit": rate_result},
         )
         return response
 
@@ -435,6 +614,9 @@ async def convert_code(
         response = ConvertResponse(
             success=False,
             converted_code="",
+            source_language="",
+            target_language="",
+            filename="",
             message=ai_message,
             execution_mode="ai_fallback_failed",
             error_code="AI_FALLBACK_FAILED",
@@ -455,7 +637,7 @@ async def convert_code(
             trace_id,
             response,
             request=request_summary,
-            metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+            metadata={**idempotency_log_metadata(x_idempotency_key, request_hash, False), "rate_limit": rate_result},
         )
         return response
 
@@ -481,6 +663,6 @@ async def convert_code(
         trace_id,
         response,
         request=request_summary,
-        metadata=idempotency_log_metadata(x_idempotency_key, request_hash, False),
+        metadata={**idempotency_log_metadata(x_idempotency_key, request_hash, False), "rate_limit": rate_result},
     )
     return response

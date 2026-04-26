@@ -1,0 +1,214 @@
+{
+  "service_version": "v1.4",
+  "capabilities": {
+    "required_keys": [
+      "service",
+      "version",
+      "service_version",
+      "supported_languages",
+      "rule_patterns",
+      "rule_summary",
+      "default_execution_mode",
+      "supports_ai_fallback",
+      "error_codes",
+      "capability_hint",
+      "request_log_retention_days",
+      "idempotency_ttl_days",
+      "allowed_provider_names",
+      "allowed_base_url_prefixes",
+      "convert_requests_per_minute",
+      "provider_test_requests_per_minute",
+      "rate_limit_window_seconds"
+    ],
+    "expected_values": {
+      "service": "codeshift",
+      "version": "v1",
+      "service_version": "v1.4",
+      "default_execution_mode": "rule_first",
+      "supports_ai_fallback": true,
+      "request_log_retention_days": 7,
+      "idempotency_ttl_days": 3,
+      "convert_requests_per_minute": 20,
+      "provider_test_requests_per_minute": 10,
+      "rate_limit_window_seconds": 60
+    },
+    "required_error_codes": [
+      "RULE_NOT_MATCHED",
+      "AI_FALLBACK_FAILED",
+      "INVALID_UTF8_FILE",
+      "FILE_LOAD_FAILED",
+      "PROVIDER_TEST_FAILED",
+      "IDEMPOTENCY_KEY_REUSED",
+      "PROVIDER_POLICY_REJECTED",
+      "RATE_LIMIT_EXCEEDED"
+    ],
+    "required_provider_names": [
+      "openai",
+      "openai-compatible",
+      "openrouter"
+    ]
+  },
+  "convert": {
+    "success_required_keys": [
+      "success",
+      "message",
+      "error_code",
+      "capability_hint",
+      "service_version",
+      "warnings",
+      "trace_id",
+      "converted_code",
+      "source_language",
+      "target_language",
+      "filename",
+      "execution_mode",
+      "rule_match_type",
+      "rule",
+      "idempotency_key",
+      "idempotent_replay"
+    ],
+    "failure_required_keys": [
+      "success",
+      "message",
+      "error_code",
+      "capability_hint",
+      "service_version",
+      "warnings",
+      "trace_id",
+      "converted_code",
+      "source_language",
+      "target_language",
+      "filename",
+      "execution_mode",
+      "rule_match_type",
+      "rule",
+      "idempotency_key",
+      "idempotent_replay"
+    ],
+    "success_example": {
+      "execution_mode": "rule_based",
+      "rule_match_type": "string_concatenation",
+      "service_version": "v1.4",
+      "idempotency_key": "ci-contract-check",
+      "idempotent_replay": false,
+      "source_language": "python",
+      "target_language": "javascript",
+      "filename": "demo.py",
+      "converted_code": "console.log(\"Hello, Alice\");\n"
+    },
+    "failure_example": {
+      "execution_mode": "rule_only_failed",
+      "error_code": "RULE_NOT_MATCHED",
+      "service_version": "v1.4",
+      "source_language": "",
+      "target_language": "",
+      "filename": "",
+      "idempotent_replay": false
+    },
+    "provider_policy_failure": {
+      "execution_mode": "provider_policy_rejected",
+      "error_code": "PROVIDER_POLICY_REJECTED",
+      "service_version": "v1.4"
+    },
+    "rate_limit_failure": {
+      "execution_mode": "rate_limited",
+      "error_code": "RATE_LIMIT_EXCEEDED",
+      "service_version": "v1.4"
+    }
+  },
+  "load_file": {
+    "success_required_keys": [
+      "success",
+      "message",
+      "error_code",
+      "capability_hint",
+      "service_version",
+      "warnings",
+      "trace_id",
+      "filename",
+      "content",
+      "language"
+    ],
+    "failure_required_keys": [
+      "success",
+      "message",
+      "error_code",
+      "capability_hint",
+      "service_version",
+      "warnings",
+      "trace_id",
+      "filename",
+      "content",
+      "language"
+    ],
+    "success_example": {
+      "success": true,
+      "filename": "demo.py",
+      "content": "print(\"hi\")\n",
+      "language": "python",
+      "service_version": "v1.4",
+      "error_code": ""
+    },
+    "invalid_utf8_failure": {
+      "success": false,
+      "error_code": "INVALID_UTF8_FILE",
+      "capability_hint": "Upload UTF-8 text source files only.",
+      "service_version": "v1.4",
+      "filename": "",
+      "content": "",
+      "language": ""
+    }
+  },
+  "provider_test": {
+    "success_required_keys": [
+      "success",
+      "message",
+      "error_code",
+      "capability_hint",
+      "service_version",
+      "warnings",
+      "trace_id",
+      "provider_name",
+      "model",
+      "base_url"
+    ],
+    "failure_required_keys": [
+      "success",
+      "message",
+      "error_code",
+      "capability_hint",
+      "service_version",
+      "warnings",
+      "trace_id",
+      "provider_name",
+      "model",
+      "base_url"
+    ],
+    "success_example": {
+      "success": true,
+      "error_code": "",
+      "provider_name": "openai",
+      "model": "gpt-5.4-mini",
+      "base_url": "https://api.openai.com/v1",
+      "service_version": "v1.4"
+    },
+    "failure_example": {
+      "success": false,
+      "error_code": "PROVIDER_TEST_FAILED",
+      "provider_name": "",
+      "model": "",
+      "base_url": "",
+      "service_version": "v1.4"
+    },
+    "provider_policy_failure": {
+      "success": false,
+      "error_code": "PROVIDER_POLICY_REJECTED",
+      "service_version": "v1.4"
+    },
+    "rate_limit_failure": {
+      "success": false,
+      "error_code": "RATE_LIMIT_EXCEEDED",
+      "service_version": "v1.4"
+    }
+  }
+}
