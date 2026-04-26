@@ -29,6 +29,8 @@ Example response fields:
 - `convert_requests_per_minute`
 - `provider_test_requests_per_minute`
 - `rate_limit_window_seconds`
+- `runtime_storage_backend`
+- `multi_instance_safe`
 
 ### `POST /v1/convert`
 
@@ -78,6 +80,7 @@ Execution modes currently returned:
 - `ai_fallback`
 - `ai_fallback_failed`
 - `idempotency_conflict`
+- `idempotency_pending`
 - `provider_policy_rejected`
 - `rate_limited`
 
@@ -89,6 +92,7 @@ Current failure codes:
 - `FILE_LOAD_FAILED`
 - `PROVIDER_TEST_FAILED`
 - `IDEMPOTENCY_KEY_REUSED`
+- `IDEMPOTENCY_KEY_IN_PROGRESS`
 - `PROVIDER_POLICY_REJECTED`
 - `RATE_LIMIT_EXCEEDED`
 
@@ -152,7 +156,7 @@ Default allowed base URL prefixes:
 
 ## Rate Limits
 
-Default rate limits are file-backed and enforced per client fingerprint.
+Default rate limits are enforced per client fingerprint. Redis mode is multi-instance safe; filesystem mode remains local to one backend instance.
 
 - convert requests: `20` per `60` seconds
 - provider test requests: `10` per `60` seconds
@@ -165,11 +169,15 @@ Environment controls:
 
 ## Runtime Storage
 
-File-backed request logs and idempotency records are written under `CODESHIFT_STORAGE_DIR`.
+Runtime storage backend is selected with `CODESHIFT_RUNTIME_STORE_BACKEND`.
+
+Filesystem mode writes under `CODESHIFT_STORAGE_DIR`:
 
 - Request log file: `logs/requests.jsonl`
 - Idempotency cache: `idempotency/*.json`
 - Rate-limit buckets: `rate_limits/*.json`
+
+Redis mode uses shared keys under `CODESHIFT_RUNTIME_STORE_KEY_PREFIX` and requires `CODESHIFT_RUNTIME_STORE_REDIS_URL`.
 
 Retention controls:
 
@@ -178,7 +186,7 @@ Retention controls:
 
 ## Contract Snapshots
 
-The repository keeps the current contract snapshot at `codeshift-backend/contract_snapshots/v1.4.json`.
+The repository keeps the current contract snapshot at `codeshift-backend/contract_snapshots/v1.5.json`.
 
 Use it as the canonical machine-readable reference for:
 

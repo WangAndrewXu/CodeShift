@@ -31,7 +31,7 @@ skills/code-conversion-skill/       Agent-facing skill package and references
   - `POST /v1/convert`
   - `POST /test-provider`
 - Supports optional `X-Idempotency-Key` on conversion requests
-- Writes file-backed request logs, idempotency records, and rate-limit buckets under `CODESHIFT_STORAGE_DIR`
+- Uses pluggable runtime storage for request logs, idempotency records, and rate-limit state, with Redis available for multi-instance coordination
 
 ## Skill/API Contract
 
@@ -45,11 +45,11 @@ Supporting references:
 - [skills/code-conversion-skill/references/supported-patterns.md](skills/code-conversion-skill/references/supported-patterns.md)
 - [skills/code-conversion-skill/references/failure-modes.md](skills/code-conversion-skill/references/failure-modes.md)
 - [skills/code-conversion-skill/references/examples.md](skills/code-conversion-skill/references/examples.md)
-- [codeshift-backend/contract_snapshots/v1.4.json](codeshift-backend/contract_snapshots/v1.4.json) as the machine-readable contract snapshot
+- [codeshift-backend/contract_snapshots/v1.5.json](codeshift-backend/contract_snapshots/v1.5.json) as the machine-readable contract snapshot
 
 Current service contract version:
 
-- `service_version = v1.4`
+- `service_version = v1.5`
 
 Current `GET /v1/capabilities` includes:
 
@@ -60,6 +60,7 @@ Current `GET /v1/capabilities` includes:
 - idempotency TTL days
 - allowed provider names and base URL prefixes
 - current rate-limit defaults
+- current runtime storage backend and whether it is multi-instance safe
 
 Current `POST /v1/convert` includes:
 
@@ -73,6 +74,7 @@ Current `POST /v1/convert` includes:
 - `idempotency_key`
 - `idempotent_replay`
 - provider-policy and rate-limit rejection modes
+- idempotency in-progress rejection mode
 
 Current snapshot-backed contract coverage also includes:
 
@@ -106,6 +108,9 @@ Environment variables:
 - `CODESHIFT_CONVERT_REQUESTS_PER_MINUTE`: optional convert request rate limit, defaults to `20`
 - `CODESHIFT_PROVIDER_TEST_REQUESTS_PER_MINUTE`: optional provider test rate limit, defaults to `10`
 - `CODESHIFT_RATE_LIMIT_WINDOW_SECONDS`: optional rate-limit window, defaults to `60`
+- `CODESHIFT_RUNTIME_STORE_BACKEND`: `filesystem` or `redis`, defaults to `filesystem`
+- `CODESHIFT_RUNTIME_STORE_REDIS_URL`: required when `CODESHIFT_RUNTIME_STORE_BACKEND=redis`
+- `CODESHIFT_RUNTIME_STORE_KEY_PREFIX`: optional Redis key prefix, defaults to `codeshift`
 
 ### Frontend
 
@@ -121,9 +126,12 @@ Optional environment variables:
 
 ## Runtime Storage
 
-Backend runtime storage is file-backed.
+Backend runtime storage supports two backends:
 
-Default contents under `CODESHIFT_STORAGE_DIR`:
+- `filesystem`: local files under `CODESHIFT_STORAGE_DIR`
+- `redis`: shared runtime state for multi-instance deployments
+
+Filesystem contents under `CODESHIFT_STORAGE_DIR`:
 
 - `logs/requests.jsonl`: request event log
 - `idempotency/*.json`: idempotency cache records
@@ -132,8 +140,9 @@ Default contents under `CODESHIFT_STORAGE_DIR`:
 Storage policy:
 
 - request logs are pruned by retention window
-- idempotency records expire by TTL and are deleted on access/prune
-- rate-limit buckets are file-backed and scoped to the backend instance
+- idempotency records expire by TTL
+- Redis rate limits use a shared fixed window per fingerprint and window start
+- Redis idempotency keys use shared pending/completed records for cross-instance replay and in-progress protection
 - request logs store `code_sha256` and `code_length`, not raw source code
 
 ## Deployment Notes
@@ -161,5 +170,5 @@ GitHub Actions currently runs `Skill API Checks` for the skill/API branch work. 
 
 - Rule-based conversion still covers only lightweight code patterns
 - Anything outside the supported lightweight patterns relies on AI fallback
-- Runtime storage is file-backed and local to the deployed backend instance; it is not yet suitable for multi-instance coordination
-- Provider policy and basic rate limiting are now in place, but durable request tracing and multi-instance enforcement still need deeper work for broad multi-agent adoption
+- Filesystem runtime storage is still single-instance; use Redis backend for multi-instance coordination
+- Request logging is shared in Redis, but long-term analytics/export is still not a durable observability pipeline

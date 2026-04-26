@@ -78,3 +78,15 @@ def get_allowed_base_url_prefixes():
         values.append(configured_base)
 
     return values
+
+
+def get_runtime_store_backend():
+    return os.getenv("CODESHIFT_RUNTIME_STORE_BACKEND", "filesystem").strip().lower() or "filesystem"
+
+
+def get_runtime_store_redis_url():
+    return os.getenv("CODESHIFT_RUNTIME_STORE_REDIS_URL", "").strip()
+
+
+def get_runtime_store_key_prefix():
+    return os.getenv("CODESHIFT_RUNTIME_STORE_KEY_PREFIX", "codeshift").strip() or "codeshift"
