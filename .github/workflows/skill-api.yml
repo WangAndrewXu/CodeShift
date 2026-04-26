@@ -45,7 +45,7 @@ jobs:
 
           from app.api import app
 
-          with open(Path("contract_snapshots") / "v1.4.json", "r", encoding="utf-8") as handle:
+          with open(Path("contract_snapshots") / "v1.5.json", "r", encoding="utf-8") as handle:
               snapshot = json.load(handle)
 
           os.environ["CODESHIFT_STORAGE_DIR"] = tempfile.mkdtemp(prefix="codeshift-ci-")
