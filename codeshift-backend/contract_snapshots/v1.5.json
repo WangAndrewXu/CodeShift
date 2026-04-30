@@ -45,7 +45,8 @@
       "IDEMPOTENCY_KEY_REUSED",
       "IDEMPOTENCY_KEY_IN_PROGRESS",
       "PROVIDER_POLICY_REJECTED",
-      "RATE_LIMIT_EXCEEDED"
+      "RATE_LIMIT_EXCEEDED",
+      "RUNTIME_STORE_UNAVAILABLE"
     ],
     "required_provider_names": [
       "openai",
@@ -124,6 +125,12 @@
       "execution_mode": "idempotency_pending",
       "error_code": "IDEMPOTENCY_KEY_IN_PROGRESS",
       "service_version": "v1.5"
+    },
+    "runtime_store_failure": {
+      "execution_mode": "runtime_store_unavailable",
+      "error_code": "RUNTIME_STORE_UNAVAILABLE",
+      "service_version": "v1.5",
+      "idempotent_replay": false
     }
   },
   "load_file": {
@@ -218,6 +225,11 @@
     "rate_limit_failure": {
       "success": false,
       "error_code": "RATE_LIMIT_EXCEEDED",
+      "service_version": "v1.5"
+    },
+    "runtime_store_failure": {
+      "success": false,
+      "error_code": "RUNTIME_STORE_UNAVAILABLE",
       "service_version": "v1.5"
     }
   }

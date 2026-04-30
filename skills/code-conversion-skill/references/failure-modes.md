@@ -61,6 +61,23 @@ Recommended agent behavior:
 - Generate a new idempotency key whenever request contents change
 - Reuse the same key only for exact retry semantics
 
+## Runtime storage unavailable
+
+Error code:
+
+- `RUNTIME_STORE_UNAVAILABLE`
+
+Meaning:
+
+- The backend could not read or write runtime state for rate limits or idempotency
+- In Redis mode, this usually means the Redis URL, credentials, or network path is invalid
+
+Recommended agent behavior:
+
+- Treat the request as not completed
+- Retry only after the operator confirms runtime storage has recovered
+- Preserve `trace_id` when reporting the failure
+
 ## Traceability
 
 Every API response now includes `trace_id`.

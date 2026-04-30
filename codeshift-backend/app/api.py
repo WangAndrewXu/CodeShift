@@ -69,7 +69,16 @@ ERROR_CODES = [
     "IDEMPOTENCY_KEY_IN_PROGRESS",
     "PROVIDER_POLICY_REJECTED",
     "RATE_LIMIT_EXCEEDED",
+    "RUNTIME_STORE_UNAVAILABLE",
 ]
+
+
+RUNTIME_STORE_UNAVAILABLE_MESSAGE = (
+    "Runtime storage is temporarily unavailable. Retry after the backend storage connection recovers."
+)
+RUNTIME_STORE_UNAVAILABLE_HINT = (
+    "Check Redis connectivity and runtime storage environment variables before retrying."
+)
 
 
 def new_trace_id():
@@ -132,19 +141,22 @@ def log_api_event(
     metadata: dict | None = None,
 ):
     payload = as_payload(response)
-    append_request_log(
-        {
-            "timestamp": now_utc_iso(),
-            "endpoint": endpoint,
-            "trace_id": trace_id,
-            "success": bool(payload.get("success", False)),
-            "error_code": payload.get("error_code", ""),
-            "execution_mode": payload.get("execution_mode", ""),
-            "service_version": payload.get("service_version", SERVICE_VERSION),
-            "request": request or {},
-            "metadata": metadata or {},
-        }
-    )
+    try:
+        append_request_log(
+            {
+                "timestamp": now_utc_iso(),
+                "endpoint": endpoint,
+                "trace_id": trace_id,
+                "success": bool(payload.get("success", False)),
+                "error_code": payload.get("error_code", ""),
+                "execution_mode": payload.get("execution_mode", ""),
+                "service_version": payload.get("service_version", SERVICE_VERSION),
+                "request": request or {},
+                "metadata": metadata or {},
+            }
+        )
+    except Exception:
+        return
 
 
 def maybe_store_idempotent_response(
@@ -155,11 +167,14 @@ def maybe_store_idempotent_response(
     if not idempotency_key:
         return
 
-    complete_idempotency_record(
-        idempotency_key,
-        request_hash,
-        as_payload(response),
-    )
+    try:
+        complete_idempotency_record(
+            idempotency_key,
+            request_hash,
+            as_payload(response),
+        )
+    except Exception:
+        return
 
 
 def idempotency_response_fields(idempotency_key: str | None, replay: bool):
@@ -174,6 +189,51 @@ def idempotency_log_metadata(idempotency_key: str | None, request_hash: str, rep
         **idempotency_response_fields(idempotency_key, replay),
         "request_hash": request_hash,
     }
+
+
+def build_provider_runtime_store_unavailable_response(
+    trace_id: str,
+    *,
+    provider_name: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+):
+    return ProviderTestResponse(
+        success=False,
+        message=RUNTIME_STORE_UNAVAILABLE_MESSAGE,
+        error_code="RUNTIME_STORE_UNAVAILABLE",
+        provider_name=provider_name or "",
+        model=model or "",
+        base_url=base_url or "",
+        capability_hint=RUNTIME_STORE_UNAVAILABLE_HINT,
+        service_version=SERVICE_VERSION,
+        warnings=[],
+        trace_id=trace_id,
+    )
+
+
+def build_convert_runtime_store_unavailable_response(
+    trace_id: str,
+    *,
+    idempotency_key: str | None = None,
+):
+    return ConvertResponse(
+        success=False,
+        converted_code="",
+        source_language="",
+        target_language="",
+        filename="",
+        message=RUNTIME_STORE_UNAVAILABLE_MESSAGE,
+        execution_mode="runtime_store_unavailable",
+        error_code="RUNTIME_STORE_UNAVAILABLE",
+        rule_match_type="",
+        rule="",
+        capability_hint=RUNTIME_STORE_UNAVAILABLE_HINT,
+        service_version=SERVICE_VERSION,
+        warnings=[],
+        trace_id=trace_id,
+        **idempotency_response_fields(idempotency_key, False),
+    )
 
 
 @app.get("/")
@@ -319,12 +379,31 @@ async def test_provider(
         base_url=x_base_url,
         api_key=x_api_key,
     )
-    rate_result = check_rate_limit(
-        "provider-test",
-        fingerprint,
-        max_requests=get_provider_test_requests_per_minute(),
-        window_seconds=get_rate_limit_window_seconds(),
-    )
+    try:
+        rate_result = check_rate_limit(
+            "provider-test",
+            fingerprint,
+            max_requests=get_provider_test_requests_per_minute(),
+            window_seconds=get_rate_limit_window_seconds(),
+        )
+    except Exception:
+        response = build_provider_runtime_store_unavailable_response(
+            trace_id,
+            provider_name=x_provider_name,
+            model=x_model,
+            base_url=x_base_url,
+        )
+        log_api_event(
+            "/test-provider",
+            trace_id,
+            response,
+            metadata={
+                "provider_name": x_provider_name or "",
+                "base_url": x_base_url or "",
+                "runtime_store_unavailable": True,
+            },
+        )
+        return response
     if not rate_result["allowed"]:
         response = ProviderTestResponse(
             success=False,
@@ -445,12 +524,26 @@ async def convert_code(
         base_url=x_base_url,
         api_key=x_api_key,
     )
-    rate_result = check_rate_limit(
-        "convert",
-        fingerprint,
-        max_requests=get_convert_requests_per_minute(),
-        window_seconds=get_rate_limit_window_seconds(),
-    )
+    try:
+        rate_result = check_rate_limit(
+            "convert",
+            fingerprint,
+            max_requests=get_convert_requests_per_minute(),
+            window_seconds=get_rate_limit_window_seconds(),
+        )
+    except Exception:
+        response = build_convert_runtime_store_unavailable_response(
+            trace_id,
+            idempotency_key=x_idempotency_key,
+        )
+        log_api_event(
+            "/v1/convert",
+            trace_id,
+            response,
+            request=request_summary,
+            metadata={"runtime_store_unavailable": True},
+        )
+        return response
     if not rate_result["allowed"]:
         response = ConvertResponse(
             success=False,
@@ -491,7 +584,21 @@ async def convert_code(
     )
 
     if x_idempotency_key:
-        existing_record = load_idempotency_record(x_idempotency_key)
+        try:
+            existing_record = load_idempotency_record(x_idempotency_key)
+        except Exception:
+            response = build_convert_runtime_store_unavailable_response(
+                trace_id,
+                idempotency_key=x_idempotency_key,
+            )
+            log_api_event(
+                "/v1/convert",
+                trace_id,
+                response,
+                request=request_summary,
+                metadata={"runtime_store_unavailable": True},
+            )
+            return response
         if existing_record is not None:
             if existing_record.get("request_hash") != request_hash:
                 response = ConvertResponse(
@@ -564,8 +671,37 @@ async def convert_code(
             )
             return replay_response
 
-        if not reserve_idempotency_key(x_idempotency_key, request_hash):
-            existing_record = load_idempotency_record(x_idempotency_key)
+        try:
+            reserved_idempotency_key = reserve_idempotency_key(x_idempotency_key, request_hash)
+        except Exception:
+            response = build_convert_runtime_store_unavailable_response(
+                trace_id,
+                idempotency_key=x_idempotency_key,
+            )
+            log_api_event(
+                "/v1/convert",
+                trace_id,
+                response,
+                request=request_summary,
+                metadata={"runtime_store_unavailable": True},
+            )
+            return response
+        if not reserved_idempotency_key:
+            try:
+                existing_record = load_idempotency_record(x_idempotency_key)
+            except Exception:
+                response = build_convert_runtime_store_unavailable_response(
+                    trace_id,
+                    idempotency_key=x_idempotency_key,
+                )
+                log_api_event(
+                    "/v1/convert",
+                    trace_id,
+                    response,
+                    request=request_summary,
+                    metadata={"runtime_store_unavailable": True},
+                )
+                return response
             if existing_record and existing_record.get("request_hash") == request_hash and existing_record.get("status") == "completed":
                 replay_payload = ConvertResponse(**existing_record["response"]).model_dump(mode="json")
                 replay_payload.update(idempotency_response_fields(x_idempotency_key, True))

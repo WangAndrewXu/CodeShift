@@ -263,6 +263,53 @@ class ApiContractTests(unittest.TestCase):
             self.assertEqual(payload[key], value)
         self.assertIn("Retry after", payload["message"])
 
+    def test_convert_returns_runtime_store_failure_when_rate_limit_store_fails(self):
+        request_body = {
+            "code": 'print("hi")\n',
+            "filename": "demo.py",
+            "source_language": "python",
+            "target_language": "javascript",
+            "allow_ai_fallback": False,
+        }
+
+        with patch("app.api.check_rate_limit", side_effect=RuntimeError("redis unavailable")):
+            response = self.client.post(
+                "/v1/convert",
+                json=request_body,
+                headers={"X-Idempotency-Key": "runtime-store-rate-limit"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        assert_required_keys(self, payload, CONTRACT_SNAPSHOT["convert"]["failure_required_keys"])
+        for key, value in CONTRACT_SNAPSHOT["convert"]["runtime_store_failure"].items():
+            self.assertEqual(payload[key], value)
+        self.assertEqual(payload["idempotency_key"], "runtime-store-rate-limit")
+        self.assertIn("Runtime storage", payload["message"])
+
+    def test_convert_returns_runtime_store_failure_when_idempotency_store_fails(self):
+        request_body = {
+            "code": 'print("hi")\n',
+            "filename": "demo.py",
+            "source_language": "python",
+            "target_language": "javascript",
+            "allow_ai_fallback": False,
+        }
+
+        with patch("app.api.load_idempotency_record", side_effect=RuntimeError("redis unavailable")):
+            response = self.client.post(
+                "/v1/convert",
+                json=request_body,
+                headers={"X-Idempotency-Key": "runtime-store-idempotency"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        assert_required_keys(self, payload, CONTRACT_SNAPSHOT["convert"]["failure_required_keys"])
+        for key, value in CONTRACT_SNAPSHOT["convert"]["runtime_store_failure"].items():
+            self.assertEqual(payload[key], value)
+        self.assertEqual(payload["idempotency_key"], "runtime-store-idempotency")
+
     def test_provider_test_rate_limits_excessive_requests(self):
         with patch.dict(
             os.environ,
@@ -283,6 +330,23 @@ class ApiContractTests(unittest.TestCase):
         assert_required_keys(self, payload, CONTRACT_SNAPSHOT["provider_test"]["failure_required_keys"])
         for key, value in CONTRACT_SNAPSHOT["provider_test"]["rate_limit_failure"].items():
             self.assertEqual(payload[key], value)
+
+    def test_provider_test_returns_runtime_store_failure_when_rate_limit_store_fails(self):
+        with patch("app.api.check_rate_limit", side_effect=RuntimeError("redis unavailable")):
+            response = self.client.post(
+                "/test-provider",
+                headers={
+                    "X-Base-URL": "https://api.openai.com/v1",
+                    "X-Provider-Name": "openai",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        assert_required_keys(self, payload, CONTRACT_SNAPSHOT["provider_test"]["failure_required_keys"])
+        for key, value in CONTRACT_SNAPSHOT["provider_test"]["runtime_store_failure"].items():
+            self.assertEqual(payload[key], value)
+        self.assertIn("Runtime storage", payload["message"])
 
     def test_provider_test_returns_snapshot_shape_for_success_response(self):
         with patch("app.api.test_ai_connection", return_value=(True, "Connection successful via openai using model gpt-5.4-mini.")):
@@ -320,6 +384,27 @@ class ApiContractTests(unittest.TestCase):
         self.assertTrue(payload["trace_id"].startswith("trace_"))
         self.assertIn("Allowed provider names", payload["capability_hint"])
         for key, value in snapshot["provider_policy_failure"].items():
+            self.assertEqual(payload[key], value)
+
+    def test_log_write_failure_does_not_break_policy_rejection(self):
+        request_body = {
+            "code": 'print("hi")\n',
+            "filename": "demo.py",
+            "source_language": "python",
+            "target_language": "javascript",
+            "allow_ai_fallback": True,
+        }
+
+        with patch("app.api.append_request_log", side_effect=RuntimeError("redis unavailable")):
+            response = self.client.post(
+                "/v1/convert",
+                json=request_body,
+                headers={"X-Provider-Name": "anthropic"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        for key, value in CONTRACT_SNAPSHOT["convert"]["provider_policy_failure"].items():
             self.assertEqual(payload[key], value)
 
     def test_provider_test_returns_snapshot_shape_for_generic_failure(self):

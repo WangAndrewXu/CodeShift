@@ -83,6 +83,7 @@ Execution modes currently returned:
 - `idempotency_pending`
 - `provider_policy_rejected`
 - `rate_limited`
+- `runtime_store_unavailable`
 
 Current failure codes:
 
@@ -95,6 +96,7 @@ Current failure codes:
 - `IDEMPOTENCY_KEY_IN_PROGRESS`
 - `PROVIDER_POLICY_REJECTED`
 - `RATE_LIMIT_EXCEEDED`
+- `RUNTIME_STORE_UNAVAILABLE`
 
 Current rule match types:
 
@@ -178,6 +180,8 @@ Filesystem mode writes under `CODESHIFT_STORAGE_DIR`:
 - Rate-limit buckets: `rate_limits/*.json`
 
 Redis mode uses shared keys under `CODESHIFT_RUNTIME_STORE_KEY_PREFIX` and requires `CODESHIFT_RUNTIME_STORE_REDIS_URL`.
+
+If runtime storage is unavailable during rate-limit or idempotency checks, endpoints return a structured `RUNTIME_STORE_UNAVAILABLE` failure instead of an unstructured 500. Request logging is best-effort and does not fail the API response.
 
 Retention controls:
 
