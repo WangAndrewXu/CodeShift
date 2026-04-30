@@ -70,6 +70,7 @@ class ConvertResponse(BaseSkillResponse):
         "idempotency_pending",
         "provider_policy_rejected",
         "rate_limited",
+        "runtime_store_unavailable",
     ]
     rule_match_type: str = ""
     rule: str = ""

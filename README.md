@@ -74,6 +74,7 @@ Current `POST /v1/convert` includes:
 - `idempotency_key`
 - `idempotent_replay`
 - provider-policy and rate-limit rejection modes
+- runtime storage unavailable rejection mode
 - idempotency in-progress rejection mode
 
 Current snapshot-backed contract coverage also includes:
@@ -143,6 +144,7 @@ Storage policy:
 - idempotency records expire by TTL
 - Redis rate limits use a shared fixed window per fingerprint and window start
 - Redis idempotency keys use shared pending/completed records for cross-instance replay and in-progress protection
+- Redis/runtime storage failures return `RUNTIME_STORE_UNAVAILABLE` instead of an unstructured 500 response
 - request logs store `code_sha256` and `code_length`, not raw source code
 
 ## Deployment Notes
